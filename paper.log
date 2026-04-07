@@ -1,4 +1,4 @@
-This is pdfTeX, Version 3.141592653-2.6-1.40.25 (TeX Live 2023/Debian) (preloaded format=pdflatex 2026.4.5)  7 APR 2026 16:04
+This is pdfTeX, Version 3.141592653-2.6-1.40.25 (TeX Live 2023/Debian) (preloaded format=pdflatex 2026.4.5)  7 APR 2026 16:31
 entering extended mode
  restricted \write18 enabled.
  %&-line parsing enabled.
@@ -416,7 +416,7 @@ File: l3backend-pdftex.def 2024-01-04 L3 backend support: PDF output (pdfTeX)
 \l__color_backend_stack_int=\count296
 \l__pdf_internal_box=\box57
 )
-No file paper.aux.
+(./paper.aux)
 \openout1 = `paper.aux'.
 
 LaTeX Font Info:    Checking defaults for OML/cmm/m/it on input line 12.
@@ -437,6 +437,7 @@ LaTeX Font Info:    Checking defaults for PD1/pdf/m/n on input line 12.
 LaTeX Font Info:    ... okay on input line 12.
 LaTeX Font Info:    Checking defaults for PU/pdf/m/n on input line 12.
 LaTeX Font Info:    ... okay on input line 12.
+
 -- Lines per column: 56 (exact).
 (/usr/share/texlive/texmf-dist/tex/context/base/mkii/supp-pdf.mkii
 [Loading MPS to PDF converter (version 2006.09.02).]
@@ -461,11 +462,28 @@ File: epstopdf-sys.cfg 2010/07/13 v1.3 Configuration of (r)epstopdf for TeX Liv
 e
 ))
 Package hyperref Info: Link coloring OFF on input line 12.
+
+(./paper.out) (./paper.out)
 \@outlinefile=\write3
 \openout3 = `paper.out'.
 
-LaTeX Font Info:    Trying to load font information for U+msa on input line 38.
 
+
+LaTeX Warning: Citation `shi2016edge' on page 1 undefined on input line 30.
+
+
+LaTeX Warning: Citation `satyanarayanan2017emergence' on page 1 undefined on in
+put line 30.
+
+
+LaTeX Warning: Citation `guo2017calibration' on page 1 undefined on input line 
+34.
+
+
+LaTeX Warning: Citation `hendrycks2017baseline' on page 1 undefined on input li
+ne 34.
+
+LaTeX Font Info:    Trying to load font information for U+msa on input line 38.
 
 (/usr/share/texlive/texmf-dist/tex/latex/amsfonts/umsa.fd
 File: umsa.fd 2013/01/14 v3.01 AMS symbols A
@@ -477,7 +495,15 @@ LaTeX Font Info:    Trying to load font information for U+msb on input line 38.
 File: umsb.fd 2013/01/14 v3.01 AMS symbols B
 )
 
-LaTeX Warning: Reference `fig:arch' on page 1 undefined on input line 60.
+LaTeX Warning: Citation `li2019maritimeiot' on page 1 undefined on input line 4
+8.
+
+
+LaTeX Warning: Citation `shi2020edgeai' on page 1 undefined on input line 58.
+
+
+LaTeX Warning: Citation `wang2023adaptiveoffload' on page 1 undefined on input 
+line 58.
 
 [1{/var/lib/texmf/fonts/map/pdftex/updmap/pdftex.map}{/usr/share/texlive/texmf-
 dist/fonts/enc/dvips/base/8r.enc}
@@ -488,6 +514,7 @@ Overfull \hbox (60.97424pt too wide) in paragraph at lines 92--102
  [][] 
  []
 
+No file paper.bbl.
 
 ** Conference Paper **
 Before submitting the final camera ready copy, remember to:
@@ -510,35 +537,26 @@ L3 programming layer <2024-01-22>
 
 LaTeX Warning: There were undefined references.
 
-
-LaTeX Warning: Label(s) may have changed. Rerun to get cross-references right.
-
-
-Package rerunfilecheck Warning: File `paper.out' has changed.
-(rerunfilecheck)                Rerun to get outlines right
-(rerunfilecheck)                or use package `bookmark'.
-
-Package rerunfilecheck Info: Checksums for `paper.out':
-(rerunfilecheck)             Before: <no file>
-(rerunfilecheck)             After:  784401BA66EF0DF7FC3AE13158CD5B99;675.
+Package rerunfilecheck Info: File `paper.out' has not changed.
+(rerunfilecheck)             Checksum: 784401BA66EF0DF7FC3AE13158CD5B99;675.
  ) 
 Here is how much of TeX's memory you used:
- 11096 strings out of 474222
- 171626 string characters out of 5748734
- 1948975 words of memory out of 5000000
- 33206 multiletter control sequences out of 15000+600000
+ 11120 strings out of 474222
+ 171972 string characters out of 5748734
+ 1947975 words of memory out of 5000000
+ 33224 multiletter control sequences out of 15000+600000
  593930 words of font info for 106 fonts, out of 8000000 for 9000
  1141 hyphenation exceptions out of 8191
- 75i,8n,79p,930b,546s stack positions out of 10000i,1000n,20000p,200000b,200000s
+ 75i,8n,79p,930b,496s stack positions out of 10000i,1000n,20000p,200000b,200000s
 </usr/share/texlive/texmf-dist/fonts/type1/public/amsfonts/cm/cmsy10.pfb></us
 r/share/texlive/texmf-dist/fonts/type1/public/amsfonts/cm/cmsy7.pfb></usr/share
 /texlive/texmf-dist/fonts/type1/urw/times/utmb8a.pfb></usr/share/texlive/texmf-
 dist/fonts/type1/urw/times/utmbi8a.pfb></usr/share/texlive/texmf-dist/fonts/typ
 e1/urw/times/utmr8a.pfb>
-Output written on paper.pdf (2 pages, 64190 bytes).
+Output written on paper.pdf (2 pages, 65653 bytes).
 PDF statistics:
- 57 PDF objects out of 1000 (max. 8388607)
- 42 compressed objects within 1 object stream
+ 77 PDF objects out of 1000 (max. 8388607)
+ 62 compressed objects within 1 object stream
  14 named destinations out of 1000 (max. 500000)
- 1 words of extra memory for PDF output out of 10000 (max. 10000000)
+ 49 words of extra memory for PDF output out of 10000 (max. 10000000)
 
