@@ -55,7 +55,7 @@ Our method is a three-way policy:
     \item \textbf{Fallback:} use a safe rule-based mode when confidence is low or the network is too degraded for reliable offload.
 \end{itemize}
 
-The routing score combines three signals: model uncertainty, queue length, and link quality. In practice, this can be implemented with a small threshold-based controller or a learned policy. For this paper, we focus on the threshold-based version because it is easier to deploy and explain. Similar offloading logic has been studied in edge computing systems, but our emphasis is on operational safety under uncertainty rather than pure throughput maximization~\cite{shi2020edgeai,wang2023adaptiveoffload}.
+The routing score combines three signals: model uncertainty, queue length, and link quality. In practice, this can be implemented with a small threshold-based controller or a learned policy. For this paper, we focus on the threshold-based version because it is easier to deploy and explain. Related maritime MEC offloading work typically optimizes latency and energy through bandit or multi-agent reinforcement learning formulations~\cite{shi2020edgeai,yang2022mab_maritime,ning2025marho}, while our emphasis is on operational safety under uncertainty rather than pure throughput maximization.
 
 Figure~\ref{fig:arch} sketches the system.
 
@@ -105,6 +105,8 @@ A practical evaluation can be built from a small emulation layer: synthetic task
 
 \section{Related Work}
 This paper sits at the intersection of edge AI, resilient communications, and mission-critical systems. Prior work on maritime IoT and mobile edge computing shows the need for low-latency local intelligence, while research on uncertainty estimation highlights that not every AI prediction should be trusted equally. Our focus is narrower: a lightweight routing layer that turns uncertainty into an operational decision.
+
+Recent maritime MEC studies provide useful context for routing and offloading design. Bandit-based server selection and deep reinforcement learning have been used for latency-energy trade-offs and hybrid offloading~\cite{yang2022mab_maritime,ning2025marho,he2025distributed_maritime}. Cooperative and UAV-assisted settings also report gains under dynamic maritime constraints~\cite{you2025joint_maritime,kong2025satd3_maritime,yang2025uavusv_edge}. Deployment-oriented and fault-tolerant formulations further motivate resilient policies that can maintain service under failures and link degradation~\cite{zhang2025deployment_maritime,yue2023offloading_maritime,zhang2024fault_tolerant_edge}.
 
 \section{Conclusion}
 This short paper proposes a practical routing policy for edge AI in mobile and maritime networks. The key idea is simple: when confidence is high, execute locally; when load or connectivity suggests a better option, forward; and when uncertainty is too high, fall back to a safe mode. That makes the system more resilient in the kind of disconnected, resource-constrained environments that ICMIC targets.
