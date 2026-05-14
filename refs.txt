@@ -1,0 +1,79 @@
+
+Joint Computation Offloading and Resource Allocation for Uncertain Maritime MEC via Cooperation of AAVs and Vessels 
+Jiahao You, Ziye Jia, and 3 more
+IEEE Transactions on Vehicular Technology · 2025 · 8 citations
+DOI
+Abstract only
+This paper tackles uncertain maritime task arrivals and resource availability by combining Lyapunov optimization with a Markov game and heterogeneous-agent soft actor-critic. The authors report that the method effectively addresses computation offloading and resource allocation under uncertainty.
+
+ 
+Multi-Armed Bandits Learning for Task Offloading in Maritime Edge Intelligence Networks 
+Tingting Yang, Shan Gao, and 6 more
+IEEE Transactions on Vehicular Technology · 2022 · 45 citations
+DOI
+Abstract only
+The paper formulates maritime edge server selection as a multi-armed bandits problem with latency and energy constraints. Its UCB1-ESSS algorithm achieves considerably lower offloading latency and weighted latency-energy cost than traditional algorithms under different QoS requirements.
+
+ 
+Distributed Optimization in Mobile Edge Intelligence for Energy-Efficient Maritime IoT Networks 
+Ang He, Heng Pan, and 5 more
+IEEE Internet of Things Magazine · 2025 · 2 citations
+DOI
+Abstract only
+A multi-agent reinforcement learning framework for hybrid maritime offloading. MARHO consistently achieves higher throughput and lower average latency than the benchmark across different task loads.
+
+ 
+Multi-Armed Bandits Learning for Task Offloading in Maritime Edge Intelligence Networks 
+Tingting Yang, Shan Gao, and 6 more
+IEEE Transactions on Vehicular Technology · 2022 · 45 citations
+DOI
+Abstract only
+This UAV-relay-assisted maritime offloading method uses hierarchical node classification plus deep reinforcement learning to handle heterogeneous and high-dimensional marine network constraints. The authors report improved efficiency and reliability of task offloading in maritime environments.
+
+ 
+SA-TD3: UAV-assisted task offloading and optimized resource allocation for maritime edge computing 
+Dechuan Kong, Shuhang Li, and 6 more
+Scientific Reports · 2025 · 1 citation
+DOI
+Abstract only
+SA-TD3 adds simulated annealing and an environment-aware advantage function to improve robustness in UAV-assisted maritime offloading. The paper reports a 19.7% reduction in average latency and a 13.2% improvement in overall performance across diverse ocean environments.
+
+ 
+Mobile Edge Deployment and Resource Management for Maritime Wireless Networks 
+Chaoyue Zhang, Bin Lin, and 3 more
+IEEE Transactions on Vehicular Technology · 2025 · 5 citations
+DOI
+Abstract only
+This work jointly optimizes deployment and offloading for maritime wireless networks using a dual-layer reinforcement learning scheme. The proposed approach outperforms comparison algorithms while handling both continuous and discrete decision variables.
+
+ 
+A Task Offloading Scheme in Maritime Edge Computing Network 
+Guangxue Yue, Chunlan Huang, and 1 more
+J. Commun. Inf. Networks · 2023 · 4 citations
+DOI
+Abstract only
+The paper proposes a cooperative MEC framework for uncertain maritime tasks using Lyapunov optimization, Markov games, and a heterogeneous-agent soft actor-critic. Simulations show the approach resolves computation offloading and resource allocation under unpredictable task arrivals.
+
+ 
+MARHO: Hybrid Task Offloading in Maritime MEC via Multi-Agent Reinforcement Learning 
+Jiahong Ning, Aimin Li, and 3 more
+IEEE Open Journal of the Communications Society · 2025
+DOI
+Abstract only
+MARHO frames hybrid maritime offloading as a Dec-POMDP and uses centralized training with decentralized execution. It achieves higher throughput and lower average latency than the existing benchmark in simulation.
+
+ 
+Edge-Intelligence-Driven Cooperative Control Framework for Heterogeneous Unmanned Aerial and Surface Vehicles in Complex Maritime Environments 
+Jingfeng Yang, Lingling Zhao, and 1 more
+Drones · 2025 · 1 citation
+DOI
+Abstract only
+The framework combines edge intelligence, multi-sensor fusion, and NSGA-II to optimize task allocation in heterogeneous UAV-USV maritime settings. It improves task efficiency, energy use, communication latency, and resilience versus centralized or single-platform scheduling.
+
+ 
+Decentralized and Fault-Tolerant Task Offloading for Enabling Network Edge Intelligence 
+Huixiang Zhang, Kaihua Liao, and 5 more
+IEEE Systems Journal · 2024 · 6 citations
+DOI
+Abstract only
+This paper addresses fault-tolerant distributed task offloading in dynamic and harsh network environments with multi-agent proximal policy optimization. The proposed algorithm is designed to reduce execution time and energy consumption while improving reliability under service failures.
