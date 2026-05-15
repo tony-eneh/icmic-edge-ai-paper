@@ -48,7 +48,17 @@ Our core idea is an uncertainty-aware routing layer that sits above the inferenc
     \item an evaluation methodology focused on latency, routing overhead, fallback behavior, and unsafe local execution avoidance under link disruption and input shift.
 \end{itemize}
 
-\section{Problem Setting}
+\section{Related Work}
+This paper sits at the intersection of edge AI, resilient communications, and mission-critical systems. Prior work on maritime IoT and mobile edge computing shows the need for low-latency local intelligence, while research on uncertainty estimation highlights that not every AI prediction should be trusted equally. Our focus is narrower: a lightweight routing layer that turns uncertainty into an operational decision.
+
+Recent maritime MEC studies provide useful context for routing and offloading design. Bandit-based server selection, distributed optimization, UAV- or AAV-assisted edge computing, and multi-agent reinforcement learning have been used for latency-energy trade-offs and hybrid offloading~\cite{yang2022mab_maritime,you2025joint_maritime,he2025distributed_maritime,kong2025satd3_maritime,ning2025marho}. Fault-tolerant formulations further motivate resilient policies that can maintain service under failures and link degradation~\cite{zhang2024fault_tolerant_edge}.
+
+Compared with this literature, the proposed design is deliberately modest. It does not attempt to solve full resource allocation, multi-agent learning, or optimal placement. Instead, it addresses the local decision that remains when those larger mechanisms are unavailable, too expensive, or not trusted in the field. This makes it complementary to optimization-based MEC approaches: a learned offloading controller may select the best peer under normal operation, while the uncertainty-aware fallback layer can guard against unsafe local execution and broken forwarding paths.
+
+Uncertainty estimation is also relevant. Calibration methods improve the relationship between predicted confidence and empirical correctness~\cite{guo2017calibration}, while out-of-distribution detection methods provide signals that a model may be operating outside its reliable domain~\cite{hendrycks2017baseline}. Recent uncertainty-aware edge-intelligence work broadens this concern to deployment settings where model quality, communication, and resource constraints interact~\cite{zhang2022edgeuncertainty,wang2023adaptiveoffload}. In this paper, uncertainty signals are not treated as final answers. They are transformed into routing constraints and fallback triggers, which is the practical systems role needed in mobile and maritime deployments.
+
+\section{System Methodology}
+\subsection{Problem Setting}
 We consider a distributed edge system deployed on a mobile or maritime platform, where sensor streams and local AI tasks arrive continuously. Each task has an estimated confidence score and an operational urgency level. For each arrival, the node must decide whether to process the task locally, forward it, or defer to a conservative fallback policy.
 
 The setting differs from ordinary cloud inference in three ways. First, connectivity is unstable, so routing decisions must work even when the network is partially unavailable. Second, the edge node may operate under tight compute and power constraints. Third, the system must preserve operational continuity, meaning that an uncertain AI decision should not silently fail.
@@ -63,7 +73,7 @@ The routing objective is deployment-dependent. In a safety-sensitive alerting ta
 
 The main assumptions are modest. Each node can compute or receive a confidence proxy, maintain approximate queue and link-quality state from local telemetry, and access an application-defined fallback routine. The proposed routing layer does not invent the safe action; it decides when the safe action should be preferred.
 
-\section{System Design}
+\subsection{System Architecture}
 Figure~\ref{fig:arch} sketches the system. Sensor tasks enter a lightweight preprocessing stage, after which the local model and uncertainty estimator produce a candidate prediction. The routing policy then chooses among local completion, peer forwarding, or fallback. The output of the router is logged with enough metadata to support later auditing: confidence bucket, link state bucket, selected action, and completion status.
 
 \begin{figure}[t]
@@ -94,7 +104,7 @@ The forwarding path is opportunistic rather than mandatory. A node may forward a
 
 The architecture also supports auditability. Each decision can be logged as a compact tuple containing confidence bucket, urgency class, queue bucket, link bucket, selected action, and completion status. These logs help operators tune thresholds after deployment and explain why a task was not handled by the learned model.
 
-\section{Routing Policy}
+\subsection{Routing Policy}
 Our method is a three-way policy:
 \begin{itemize}
     \item \textbf{Local execution:} run inference on the current edge node when confidence is high and the queue is manageable.
@@ -122,7 +132,7 @@ In practice, this can be implemented with a small threshold-based controller or 
 
 The policy can be tuned in two stages. Offline, historical traces or simulated traces are used to choose conservative starting thresholds. Online, the node updates moving averages for queue delay and link quality, but it does not need to retrain the AI model. This separation is useful for maritime deployments where field updates are costly and operators may require predictable behavior before accepting autonomous routing changes.
 
-\section{Failure Handling}
+\subsection{Failure Handling}
 Edge AI systems fail in several different ways, and the routing layer should distinguish them. A low-confidence prediction is not the same as a saturated queue, and a weak link is not the same as a peer failure. Treating these cases separately makes the system easier to diagnose and safer to operate.
 
 For connectivity degradation, the router uses bounded retries and timeouts. A forwarded task is marked pending only for a short interval determined by urgency. When the timeout expires, the router recomputes the action using the current state. For compute pressure, the node raises the load term and may prefer forwarding if links are healthy. For model uncertainty, the router avoids forwarding tasks that are already outside the model's reliable region unless a remote node has a known stronger model, broader context, or fresher calibration.
@@ -131,8 +141,8 @@ Fallback behavior should be conservative and auditable. For anomaly detection, f
 
 The router also needs a fail-closed mode. If both local confidence and network state are poor for a safety-sensitive task, the correct behavior is not to force an AI decision. Instead, the task should be converted into a safe operational state, deferred for human review, or logged as unresolved depending on the application.
 
-\section{Evaluation Plan}
-Because this is a short-paper target, the evaluation should be compact and convincing rather than exhaustive. The main research questions are:
+\section{Evaluation and Results}
+Because this is a short-paper target, the evaluation is designed to be compact and convincing rather than exhaustive. The main research questions are:
 \begin{enumerate}
     \item Does uncertainty-aware routing reduce unsafe low-confidence local executions?
     \item Does it keep latency acceptable when connectivity degrades?
@@ -174,16 +184,7 @@ A practical evaluation can be built from a small emulation layer: synthetic task
 
 The evaluation should report both aggregate and per-class behavior. Aggregate latency can hide the fact that safety-sensitive tasks are being routed correctly, while per-class fallback rates reveal whether the policy is too conservative. A balanced policy should increase fallback under uncertainty without sending every difficult task to fallback.
 
-\section{Related Work}
-This paper sits at the intersection of edge AI, resilient communications, and mission-critical systems. Prior work on maritime IoT and mobile edge computing shows the need for low-latency local intelligence, while research on uncertainty estimation highlights that not every AI prediction should be trusted equally. Our focus is narrower: a lightweight routing layer that turns uncertainty into an operational decision.
-
-Recent maritime MEC studies provide useful context for routing and offloading design. Bandit-based server selection, distributed optimization, UAV- or AAV-assisted edge computing, and multi-agent reinforcement learning have been used for latency-energy trade-offs and hybrid offloading~\cite{yang2022mab_maritime,you2025joint_maritime,he2025distributed_maritime,kong2025satd3_maritime,ning2025marho}. Fault-tolerant formulations further motivate resilient policies that can maintain service under failures and link degradation~\cite{zhang2024fault_tolerant_edge}.
-
-Compared with this literature, the proposed design is deliberately modest. It does not attempt to solve full resource allocation, multi-agent learning, or optimal placement. Instead, it addresses the local decision that remains when those larger mechanisms are unavailable, too expensive, or not trusted in the field. This makes it complementary to optimization-based MEC approaches: a learned offloading controller may select the best peer under normal operation, while the uncertainty-aware fallback layer can guard against unsafe local execution and broken forwarding paths.
-
-Uncertainty estimation is also relevant. Calibration methods improve the relationship between predicted confidence and empirical correctness~\cite{guo2017calibration}, while out-of-distribution detection methods provide signals that a model may be operating outside its reliable domain~\cite{hendrycks2017baseline}. Recent uncertainty-aware edge-intelligence work broadens this concern to deployment settings where model quality, communication, and resource constraints interact~\cite{zhang2022edgeuncertainty,wang2023adaptiveoffload}. In this paper, uncertainty signals are not treated as final answers. They are transformed into routing constraints and fallback triggers, which is the practical systems role needed in mobile and maritime deployments.
-
-\section{Limitations and Discussion}
+\subsection{Discussion and Limitations}
 The proposal has several limitations. Confidence estimates can be miscalibrated after sensor drift or environmental change, so the router depends on periodic calibration checks or conservative thresholds. Fallback policies are also application-specific: a generic router can decide when to invoke fallback, but domain experts must define what fallback means for a vessel, device, or operational workflow. Finally, forwarding assumes some peer capability metadata; without it, offload decisions become less reliable.
 
 The main design risk is over-conservatism. If thresholds are too strict, the router may send too many tasks to fallback and reduce automation benefits. If thresholds are too loose, it may preserve throughput while failing to protect safety-sensitive decisions. This trade-off should be reported explicitly through per-class fallback rates and unsafe local execution rates rather than hidden inside aggregate latency.
