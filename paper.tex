@@ -7,6 +7,7 @@
 \usepackage{xcolor}
 \usepackage{booktabs}
 \usepackage{array}
+\usepackage{tabularx}
 \usepackage{hyperref}
 
 \begin{document}
@@ -67,9 +68,22 @@ Figure~\ref{fig:arch} sketches the system. Sensor tasks enter a lightweight prep
 
 \begin{figure}[t]
 \centering
-\fbox{\parbox{0.9\columnwidth}{\centering
-Sensor tasks $\rightarrow$ preprocessing $\rightarrow$ model and uncertainty estimator $\rightarrow$ routing policy $\rightarrow$ local completion / peer forwarding / safe fallback\vspace{1em}
-}}
+\fbox{%
+\begin{minipage}{\dimexpr\columnwidth-2\fboxsep-2\fboxrule\relax}
+\centering
+\footnotesize
+\begin{tabular}{@{}c@{}}
+Sensor tasks \\
+$\downarrow$ \\
+Preprocessing \\
+$\downarrow$ \\
+Model and uncertainty estimator \\
+$\downarrow$ \\
+Routing policy \\
+$\downarrow$ \\
+Local completion / peer forwarding / safe fallback
+\end{tabular}
+\end{minipage}}
 \caption{High-level routing architecture for resilient edge AI.}
 \label{fig:arch}
 \end{figure}
@@ -143,8 +157,8 @@ The primary metrics are task latency, forwarding rate, fallback rate, and the fr
 \caption{Suggested evaluation summary for the short paper}
 \label{tab:eval}
 \footnotesize
-\setlength{\tabcolsep}{2pt}
-\begin{tabular}{p{0.22\columnwidth}p{0.33\columnwidth}p{0.31\columnwidth}}
+\setlength{\tabcolsep}{3pt}
+\begin{tabularx}{\columnwidth}{@{}>{\raggedright\arraybackslash}p{0.25\columnwidth}>{\raggedright\arraybackslash}X>{\raggedright\arraybackslash}X@{}}
 \toprule
 Metric & What it measures & Why it matters \\
 \midrule
@@ -153,7 +167,7 @@ Forwarding rate & Tasks offloaded to peers & Network dependence \\
 Fallback rate & Tasks handled conservatively & Safety under uncertainty \\
 Low-confidence avoidance & Unsafe local executions prevented & Decision reliability \\
 \bottomrule
-\end{tabular}
+\end{tabularx}
 \end{table}
 
 A practical evaluation can be built from a small emulation layer: synthetic task arrivals, configurable link delay, and four routing policies (always local, always forward, load-only, and uncertainty-aware). Each scenario can run for a fixed number of tasks, with identical random seeds across policies. The most informative plots are latency distributions, action-selection rates over time, and unsafe local execution rate under input shift. The expected result is that the uncertainty-aware policy retains competitive latency under good links while reducing low-confidence local executions when conditions worsen.
