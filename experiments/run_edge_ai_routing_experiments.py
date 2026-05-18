@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# pyright: reportMissingImports=false, reportMissingModuleSource=false
 """
 Complete experimental evaluation for uncertainty-aware edge AI routing.
 Uses real ML model (ResNet18) with CIFAR-10 (ID) and CIFAR-100 (OOD proxy).
@@ -110,7 +111,7 @@ for conf in confidence_grid:
 
         costs = {'local': local_cost, 'offload': offload_cost,
                  'fallback': fallback_cost}
-        best_action = min(costs, key=costs.get)
+        best_action = min(costs, key=lambda action: costs[action])
 
         results_boundary.append({
             'confidence': conf,
@@ -411,16 +412,19 @@ latex_table = r"""
 \textbf{Policy} & \textbf{Latency (ms)} & \textbf{Unsafe Rate} & \textbf{Energy (J)} & \textbf{Fallback Rate} \\
 \midrule
 """
-for policy in intermittent_summary.index.get_level_values('policy'):
-    row = intermittent_summary.loc[policy]
-    fallback_rate = action_dist_pct.loc[(
-        'intermittent', policy)].get('fallback', 0) / 100
+for policy in intermittent_summary.index.get_level_values('policy').unique():
+    row = intermittent_summary.loc[(policy, 'intermittent')]
+    fallback_rate = 0.0
+    if 'fallback' in action_dist_pct.columns:
+        fallback_pct = action_dist_pct.loc[(
+            policy, 'intermittent'), 'fallback']
+        fallback_rate = float(str(fallback_pct)) / 100
     latex_table += f"{policy} & {row['Latency (ms)']:.1f} & {row['Unsafe Rate']:.1%} & {row['Energy (J)']:.2f} & {fallback_rate:.1%} \\\\\n"
 
-latex_table += r"\bottomrule
+latex_table += r"""\bottomrule
 \end{tabular}
 \end{table}
-"
+"""
 
 print("\n" + "=" * 60)
 print("LATEX TABLE FOR YOUR PAPER")
