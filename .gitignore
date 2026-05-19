@@ -36,6 +36,13 @@ venv/
 __pycache__/
 *.pyc
 
+# Experiment generated artifacts
+/data/
+/action_distribution.csv
+/full_results.csv
+/latex_table.txt
+/results_summary.csv
+
 # OS files
 .DS_Store
 Thumbs.db
