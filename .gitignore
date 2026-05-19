@@ -7,6 +7,7 @@
 *.log
 *.out
 *.pdf
+!/paper/figures/*.pdf
 *.synctex.gz
 *.toc
 *.nav
@@ -39,6 +40,7 @@ __pycache__/
 # Experiment generated artifacts
 /data/
 /action_distribution.csv
+/confidence_traces.csv
 /full_results.csv
 /latex_table.txt
 /results_summary.csv
@@ -50,3 +52,6 @@ Thumbs.db
 # Build directory
 build/
 dist/
+
+# Environment variables
+.env
