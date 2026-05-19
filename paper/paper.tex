@@ -25,7 +25,7 @@
 \maketitle
 
 \begin{abstract}
-Mobile and maritime systems increasingly depend on edge AI for situational awareness, anomaly detection, and local operational decisions. These deployments, however, combine intermittent connectivity, constrained compute, heterogeneous link quality, and distribution shift, making naive local inference or fixed offloading policies brittle. This paper proposes an uncertainty-aware task routing layer for edge AI workloads. For each task, the router chooses among local inference, peer or relay forwarding, and a conservative fallback mode by jointly considering model confidence, queue pressure, urgency, and link state. The design treats uncertainty as an operational signal: low-confidence predictions are intercepted before they drive downstream actuation. We evaluate the design with a 37,500-task emulation driven by ResNet-18 confidence traces from CIFAR-10 and CIFAR-100 proxy inputs under stable, intermittent, and degraded network conditions. Under intermittent connectivity, the three-way router reduces unsafe outcomes from 21.6\% for always-local execution to 7.6\%, while lowering mean latency from 82.6 ms to 71.4 ms. Under degraded connectivity, it lowers unsafe outcomes to 5.4\% by sending 49.8\% of tasks to conservative fallback. The results show that fallback should be treated as an explicit routing action, not merely as an error state.
+Mobile and maritime systems increasingly depend on edge AI for situational awareness, vessel detection, anomaly monitoring, and local operational decisions. These deployments, however, combine intermittent connectivity, constrained compute, heterogeneous link quality, and input shift, making naive local inference or fixed offloading policies brittle. This paper proposes an uncertainty-aware task routing layer for edge AI workloads. For each task, the router chooses among local inference, peer or relay forwarding, and a conservative fallback mode by jointly considering model confidence, queue pressure, urgency, and link state. We evaluate the design using Kaggle's Ships in Satellite Imagery dataset, training a ResNet-18 vessel classifier and deriving confidence traces from nominal and synthetically degraded satellite image chips. In a 37,500-task routing emulation, the three-way router reduces unsafe outcomes under degraded connectivity from 7.3\% for always-local execution and 6.8\% for always-offload execution to 4.8\%, while using fallback for 7.6\% of tasks. Under intermittent connectivity, it reduces unsafe outcomes relative to always-local and confidence-threshold policies, but the experiment also reveals an important limitation: max-softmax confidence remains high for some adverse-condition errors. The results support fallback as a first-class routing action while showing that maritime edge AI still needs stronger calibration or shift detection.
 \end{abstract}
 
 \begin{IEEEkeywords}
@@ -170,6 +170,7 @@ Edge AI systems fail in several different ways, and the routing layer should dis
 \textbf{Application} & \textbf{Full inference (local/offload)} & \textbf{Fallback action} \\
 \midrule
 Vessel collision avoidance & Predict intent (e.g., crossing, overtaking) of nearby vessel & Reduce speed, sound horn, maintain heading, alert operator \\
+Maritime surveillance & Classify ship/no-ship satellite image chip & Flag chip for review, defer alert, request another pass \\
 Engine anomaly detection & Classify fault type from vibration spectrogram & Report ``inspection needed'', log raw data, use limit-based alert \\
 Navigation waypoint decision & Select optimal path from camera/LiDAR & Hold position, revert to last safe heading, request human review \\
 Cargo monitoring & Predict temperature anomaly from sensor fusion & Use last valid reading $+$ conservative drift bound, flag uncertainty \\
@@ -187,7 +188,26 @@ The router also needs a fail-closed mode. If both local confidence and network s
 We implemented the routing policy in a compact Python emulation to answer three questions: (i) whether uncertainty-aware routing reduces unsafe outcomes, (ii) whether latency remains acceptable under link disruption, and (iii) whether conservative fallback is used selectively rather than as a default response.
 
 \subsection{Experimental Setup}
-The experiment uses a pretrained ResNet-18 model with ImageNet weights to generate max-softmax confidence scores. We preprocess CIFAR-10 images as the nominal task stream and CIFAR-100 images as a distribution-shift proxy. For efficiency, confidence values are precomputed for 500 samples from each dataset and then sampled with small additive noise during the routing emulation. The task stream contains 40\% shifted inputs and marks 30\% of tasks as safety-sensitive.
+The experiment uses Kaggle's Ships in Satellite Imagery dataset (ShipsNet)~\cite{shipsnet_kaggle}, which contains 4,000 PlanetScope satellite image chips of size $80\times80$: 1,000 ship images and 3,000 no-ship images. This dataset better matches the paper's maritime monitoring motivation than a generic natural-image benchmark because the inference task is vessel detection in coastal satellite imagery.
+
+We train a binary ResNet-18 classifier initialized from ImageNet weights. The dataset is split into 2,800 training images, 600 validation images, and 600 held-out test images with stratified class balance. After three epochs on CPU, the classifier reaches 84.8\% validation accuracy. We then extract confidence traces from 500 held-out images in two conditions: the original nominal satellite chips and an adverse condition generated by deterministic contrast reduction, brightness reduction, Gaussian blur, haze blending, and sensor-like noise. The adverse transformation is not intended to be a full weather simulator; it is a repeatable stressor for visibility degradation.
+
+Table~\ref{tab:classifier_traces} summarizes the confidence traces. Nominal accuracy is 88.8\%, while adverse-condition accuracy drops to 75.0\%. The mean confidence, however, is higher in the adverse condition. This overconfidence is an important result: simple max-softmax confidence is useful as a routing signal, but it does not fully detect maritime image degradation.
+
+\begin{table}[t]
+\centering
+\caption{Held-out ShipsNet confidence traces}
+\label{tab:classifier_traces}
+\footnotesize
+\begin{tabular}{@{}lrrrr@{}}
+\toprule
+\textbf{Condition} & \textbf{Samples} & \textbf{Acc.} & \textbf{Mean Conf.} & \textbf{Std.} \\
+\midrule
+Nominal & 500 & 88.8\% & 0.810 & 0.140 \\
+Adverse & 500 & 75.0\% & 0.842 & 0.085 \\
+\bottomrule
+\end{tabular}
+\end{table}
 
 Each policy is evaluated on 2,500 tasks per network scenario, producing 37,500 task decisions across five policies and three scenarios. The scenarios are:
 \begin{itemize}
@@ -196,12 +216,19 @@ Each policy is evaluated on 2,500 tasks per network scenario, producing 37,500 t
     \item \textbf{Degraded:} 0.2--2.5 Mbps bandwidth, 40\% peer availability, 30\% loss, and 80 ms base network latency.
 \end{itemize}
 
-The compared policies are always local, always offload when a peer is available, confidence threshold offloading, load-only offloading, and the proposed three-way policy. The confidence-threshold policy forwards tasks with confidence below 0.55. The load-only policy forwards when simulated queue pressure exceeds 0.5 and a peer is available. The proposed router uses confidence and bandwidth guardrails: it falls back when confidence is below 0.48 and bandwidth is below 1.8 Mbps, offloads when bandwidth is above 1.8 Mbps and a peer is available, and otherwise executes locally.
+The task stream samples adverse-condition traces with probability 0.4 and marks 30\% of tasks as safety-sensitive. The compared policies are always local, always offload when a peer is available, confidence-threshold offloading, load-only offloading, and the proposed three-way policy. The confidence-threshold policy forwards tasks with confidence below 0.70. The load-only policy forwards when simulated queue pressure exceeds 0.5 and a peer is available. The proposed router uses confidence and bandwidth guardrails: it falls back when confidence is below 0.65 and bandwidth is below 1.8 Mbps, offloads when bandwidth is above 1.8 Mbps and a peer is available, and otherwise executes locally.
 
-Latency and energy are computed with an emulated cost model. Local execution latency increases as confidence decreases. Offloading adds network delay and may fail when a peer is unavailable or packet loss occurs. Fallback has fixed low latency and low energy because it represents a conservative rule-based response rather than neural inference. We define the unsafe rate as the fraction of all tasks that produce an unsafe emulated outcome: a safety-sensitive low-confidence local decision or a safety-sensitive offload failure. Thus, the metric captures operational risk in the routing layer, not classifier top-1 accuracy.
+Latency and energy are computed with an emulated cost model. Local execution latency increases as confidence decreases. Offloading adds network delay and may fail when a peer is unavailable or packet loss occurs. Fallback has fixed low latency and low energy because it represents a conservative rule-based response rather than neural inference. We define the unsafe rate as the fraction of all tasks that produce an unsafe emulated outcome: a safety-sensitive wrong or low-confidence local decision, or a safety-sensitive offload failure. Thus, the metric captures routing-layer operational risk, not physical maritime incidents.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\columnwidth]{figures/decision_boundary.pdf}
+\caption{Three-way routing regions for the implemented threshold policy. Fallback is selected only when classifier confidence and bandwidth are both below configured guardrails.}
+\label{fig:decision_boundary}
+\end{figure}
 
 \subsection{Baseline Comparison}
-Table~\ref{tab:main_results} reports the intermittent-connectivity case, which is the most representative operating point for mobile and maritime networks. Always-local execution has predictable energy use but ignores confidence and produces the highest unsafe rate, 21.6\%. Always-offload and load-only policies reduce unsafe outcomes relative to always-local execution, but they remain exposed to peer unavailability and link loss. The confidence-threshold policy lowers unsafe outcomes but increases latency to 105.1 ms because it forwards many low-confidence tasks even when the network is only moderately usable.
+Table~\ref{tab:main_results} reports the intermittent-connectivity case, which is a representative operating point for mobile and maritime networks. Always-local execution is fastest but ignores confidence and produces a 5.8\% unsafe rate. Always-offload reduces unsafe outcomes to 4.3\%, but increases mean latency to 71.6 ms because it depends on peer availability and link quality. Confidence-threshold offloading lowers unsafe outcomes relative to always-local execution, but still forwards tasks without considering bandwidth. Load-only routing obtains the lowest unsafe rate in this scenario, but at higher latency than the proposed policy.
 
 \begin{table}[t]
 \centering
@@ -215,20 +242,20 @@ Table~\ref{tab:main_results} reports the intermittent-connectivity case, which i
 \textbf{Policy} & \textbf{Lat.} & \textbf{Unsafe} & \textbf{Energy} & \textbf{Fallback} \\
  & \textbf{(ms)} & \textbf{Rate} & \textbf{(J)} & \textbf{Rate} \\
 \midrule
-Always Local & 82.6 & 21.6\% & 0.50 & 0.0\% \\
-Always Offload & 80.8 & 8.5\% & 0.59 & 0.0\% \\
-Confidence Threshold & 105.1 & 9.4\% & 0.64 & 0.0\% \\
-Load Only & 80.9 & 9.7\% & 0.58 & 0.0\% \\
-Three-Way (Ours) & \textbf{71.4} & \textbf{7.6\%} & 0.53 & 14.4\% \\
+Always Local & \textbf{49.4} & 5.8\% & 0.50 & 0.0\% \\
+Always Offload & 71.6 & 4.3\% & 0.59 & 0.0\% \\
+Confidence Threshold & 59.6 & 4.9\% & \textbf{0.53} & 0.0\% \\
+Load Only & 67.0 & \textbf{3.8\%} & 0.57 & 0.0\% \\
+Three-Way (Ours) & 61.6 & 4.4\% & 0.56 & 2.6\% \\
 \bottomrule
 \end{tabular}
 }
 \end{table}
 
-The three-way router achieves the best latency and the lowest unsafe rate in the intermittent scenario. Compared with always-local execution, unsafe outcomes fall from 21.6\% to 7.6\%, a relative reduction of 64.8\%. Compared with confidence-threshold offloading, the unsafe rate falls from 9.4\% to 7.6\% while latency improves by 33.7 ms. This improvement occurs because the policy does not treat every low-confidence task as an offloading candidate. When confidence and bandwidth are both poor, it invokes fallback instead of waiting on a fragile link.
+The three-way router is not uniformly best in the intermittent case, but it provides a balanced safety-latency trade-off. Compared with always-local execution, unsafe outcomes fall from 5.8\% to 4.4\%, a relative reduction of 24.8\%. Compared with confidence-threshold offloading, unsafe outcomes fall from 4.9\% to 4.4\% while latency increases only modestly relative to local execution. Load-only routing obtains a lower unsafe rate, but its latency is 5.4 ms higher than the three-way policy. This result supports the paper's narrower claim: fallback-aware routing is valuable as a guardrail, especially when link degradation and uncertainty occur together, but it does not replace the need for good calibration and workload-specific threshold tuning.
 
 \subsection{Behavior Across Network Conditions}
-Table~\ref{tab:threeway_behavior} shows how the proposed router changes behavior across link conditions. Under stable links, the router almost never needs fallback and behaves mostly like an offloading policy. Under intermittent links, it uses a mixed strategy: 56.4\% offload, 29.2\% local, and 14.4\% fallback. Under degraded links, fallback rises to 49.8\%, local execution rises to 37.4\%, and offloading drops to 12.8\% because peer availability and bandwidth no longer justify network dependence.
+Table~\ref{tab:threeway_behavior} shows how the proposed router changes behavior across link conditions. Under stable links, the router uses no fallback and behaves mostly like an offloading policy. Under intermittent links, it uses a mixed strategy: 55.2\% offload, 42.2\% local, and 2.6\% fallback. Under degraded links, fallback rises to 7.6\%, local execution rises to 81.1\%, and offloading drops to 11.3\% because peer availability and bandwidth no longer justify network dependence.
 
 \begin{table}[t]
 \centering
@@ -242,38 +269,40 @@ Table~\ref{tab:threeway_behavior} shows how the proposed router changes behavior
 \textbf{Scenario} & \textbf{Lat.} & \textbf{Unsafe} & \textbf{Energy} & \textbf{Local} & \textbf{Offload} & \textbf{Fallback} \\
  & \textbf{(ms)} & \textbf{Rate} & \textbf{(J)} & \textbf{Rate} & \textbf{Rate} & \textbf{Rate} \\
 \midrule
-Stable & 36.5 & 3.4\% & 0.59 & 10.7\% & 89.3\% & 0.0\% \\
-Intermittent & 71.4 & 7.6\% & 0.53 & 29.2\% & 56.4\% & 14.4\% \\
-Degraded & 67.7 & 5.4\% & 0.37 & 37.4\% & 12.8\% & 49.8\% \\
+Stable & 33.5 & 1.5\% & 0.59 & 10.7\% & 89.3\% & 0.0\% \\
+Intermittent & 61.6 & 4.4\% & 0.56 & 42.2\% & 55.2\% & 2.6\% \\
+Degraded & 58.5 & 4.8\% & 0.50 & 81.1\% & 11.3\% & 7.6\% \\
 \bottomrule
 \end{tabular}
 }
 \end{table}
 
-The degraded case is especially important. Always-offload reaches 118.6 ms latency and a 15.6\% unsafe rate, while confidence-threshold offloading reaches 184.3 ms latency and a 15.4\% unsafe rate. The proposed router reduces latency to 67.7 ms and unsafe rate to 5.4\% by failing closed: nearly half of the degraded-link tasks use conservative fallback rather than attempting unreliable offload or low-confidence local inference. This behavior is desirable in safety-sensitive maritime systems because poor connectivity should not force the system into either a brittle remote dependency or an untrusted local action.
+The degraded case is the clearest setting for the proposed policy. Always-offload reaches 98.2 ms latency and a 6.8\% unsafe rate, confidence-threshold offloading reaches 78.9 ms and a 7.0\% unsafe rate, and load-only routing reaches 91.8 ms and a 7.2\% unsafe rate. The proposed router reduces unsafe outcomes to 4.8\% and keeps latency at 58.5 ms by avoiding fragile offload attempts and invoking fallback for a bounded subset of tasks. This behavior is desirable in safety-sensitive maritime systems because poor connectivity should not force the system into either a brittle remote dependency or an untrusted local action.
 
 \begin{figure*}[t]
 \centering
 \includegraphics[width=0.95\textwidth]{figures/fallback_analysis.pdf}
-\caption{Fallback analysis for the three-way policy: fallback events concentrate below the confidence threshold, increase as connectivity degrades, and remain visible in both nominal and shifted input streams.}
+\caption{Fallback analysis for the three-way policy on ShipsNet traces: fallback events occur below the confidence threshold, increase as connectivity degrades, and differ between nominal and adverse image conditions.}
 \label{fig:fallback_analysis}
 \end{figure*}
 
-Figure~\ref{fig:fallback_analysis} further explains fallback behavior. The confidence histogram confirms that fallback is triggered for low-confidence tasks, while the scenario-level plot shows that fallback is primarily a degraded-connectivity response. The input-type analysis shows similar fallback rates for CIFAR-10 proxy inputs and CIFAR-100 shifted inputs, 21.3\% and 21.5\% respectively across all scenarios. This is expected because the router combines confidence with bandwidth; input shift alone does not force fallback unless the link state also makes offloading unreliable.
+Figure~\ref{fig:fallback_analysis} further explains fallback behavior. The confidence histogram confirms that fallback is triggered for low-confidence tasks, while the scenario-level plot shows that fallback is primarily a degraded-connectivity response. Across all scenarios for the three-way policy, fallback is 5.2\% for nominal traces and 0.7\% for adverse traces. This counterintuitive result occurs because the classifier is sometimes more confident under the synthetic adverse transformation even when accuracy falls. The finding is useful because it exposes a real deployment concern: confidence-only fallback will miss overconfident shifted inputs unless confidence is calibrated or augmented with explicit shift detection.
 
-Overall, the results support the main design claim: conservative fallback is not merely a recovery mechanism after failure. It is a useful third routing action that lets the system preserve continuity when neither local inference nor forwarding is trustworthy.
+Overall, the results support the main design claim: conservative fallback is not merely a recovery mechanism after failure. It is a useful third routing action that lets the system preserve continuity under degraded links, while the overconfidence observed on adverse satellite chips shows why uncertainty quality matters.
 
 \section{Limitations and Future Work}
 
 The proposal has several limitations that point to future research directions.
 
-\noindent\textbf{Calibration dependence.} The router assumes confidence scores are meaningful and calibrated. Under domain shift (e.g., new vessel types, weather conditions), calibration may degrade. Future work could incorporate online calibration~\cite{guo2017calibration} or conformal prediction to maintain reliable uncertainty estimates.
+\noindent\textbf{Calibration dependence.} The router assumes confidence scores are meaningful and calibrated. The ShipsNet experiment shows why this is a serious assumption: adverse image degradation lowers classifier accuracy while mean confidence remains high. Future work should incorporate online calibration~\cite{guo2017calibration}, conformal prediction, or explicit shift/OOD detectors rather than relying only on max-softmax confidence.
 
 \noindent\textbf{Peer capability metadata.} Forwarding assumes the node knows what remote peers can do (e.g., model version, accelerator type, current load). In ad-hoc maritime networks, this requires lightweight service discovery or periodic beaconing, which adds overhead.
 
-\noindent\textbf{Threshold tuning.} The current policy uses fixed thresholds ($\alpha,\beta,\gamma,\lambda,\mu,\nu,\rho,\eta,\delta$). While interpretable, optimal thresholds may vary with deployment context. Adaptive threshold adjustment (e.g., via bandit feedback or Bayesian optimization) is a natural extension.
+\noindent\textbf{Threshold tuning.} The evaluated policy uses fixed confidence and bandwidth thresholds. While interpretable, optimal thresholds may vary with deployment context, model calibration, task criticality, and network cost. Adaptive threshold adjustment (e.g., via bandit feedback or Bayesian optimization) is a natural extension.
 
-\noindent\textbf{Proxy workload.} The experiment uses CIFAR-10 and CIFAR-100 as compact confidence-trace sources rather than as a maritime perception benchmark. The resulting numbers should be interpreted as a routing-layer stress test, not as evidence that ResNet-18 is suitable for maritime perception. Future work should use vessel imagery, engine telemetry, radar/AIS fusion traces, or other domain-specific workloads.
+\noindent\textbf{Dataset scope.} ShipsNet is maritime-relevant, but it represents satellite image-chip classification over San Francisco Bay and San Pedro Bay rather than onboard perception, AIS trajectory prediction, or engine monitoring. The resulting numbers should be interpreted as evidence for a maritime surveillance routing workload, not as a universal claim about all maritime edge AI tasks.
+
+\noindent\textbf{Synthetic adverse condition.} The adverse split is generated through image corruptions that approximate visibility degradation. It is repeatable and useful for stress testing, but it does not replace real fog, rain, night, sensor noise, seasonal change, or geographic domain-shift traces.
 
 \noindent\textbf{Emulated risk model.} Unsafe outcomes are generated by a routing-level cost model rather than measured physical incidents. This makes the experiment reproducible and transparent, but deployment claims require hardware-in-the-loop evaluation, real link traces (e.g., Iridium, LTE, or Starlink maritime links), and application-specific safety definitions.
 
@@ -284,7 +313,7 @@ The proposal has several limitations that point to future research directions.
 Despite these limitations, the architecture is useful because it converts uncertainty into visible system behavior. Many edge AI designs report accuracy and latency while treating uncertain predictions as ordinary outputs. The proposed router instead asks whether the prediction should be used, forwarded, or replaced with a safe operational response---a framing especially appropriate for mobile and maritime networks where degraded connectivity is normal rather than exceptional.
 
 \section{Conclusion}
-This paper proposes a practical routing policy for edge AI in mobile and maritime networks. The key idea is simple: when confidence is high, execute locally; when load and connectivity suggest a better option, forward; and when uncertainty is too high, fall back to a safe mode. The design adds a lightweight decision layer above existing inference models and below operational actuation, allowing uncertainty, queue pressure, urgency, and link quality to shape runtime behavior. In a 37,500-task emulation, the three-way router achieved the best intermittent-link latency and unsafe rate among the evaluated policies, and under degraded links it reduced unsafe outcomes by using fallback as an explicit operational state. Overall, uncertainty-aware routing offers a deployable path toward more resilient edge AI in disconnected, resource-constrained environments.
+This paper proposes a practical routing policy for edge AI in mobile and maritime networks. The key idea is simple: when confidence is high, execute locally; when load and connectivity suggest a better option, forward; and when uncertainty and poor links coincide, fall back to a safe mode. The design adds a lightweight decision layer above existing inference models and below operational actuation, allowing uncertainty, queue pressure, urgency, and link quality to shape runtime behavior. In a 37,500-task emulation driven by ShipsNet vessel-detection traces, the three-way router reduces unsafe outcomes under degraded connectivity and uses fallback as an explicit operational state. The same experiment also shows that overconfident adverse-condition errors can bypass confidence-only fallback, motivating stronger calibration and shift detection. Overall, uncertainty-aware routing offers a deployable path toward more resilient edge AI in disconnected, resource-constrained environments, provided uncertainty estimates are treated as engineering signals that must be validated rather than assumed correct.
 
 \bibliographystyle{IEEEtran}
 \bibliography{references}
