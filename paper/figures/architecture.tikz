@@ -1,0 +1,53 @@
+\begin{tikzpicture}[
+    font=\scriptsize,
+    >=Stealth,
+    node distance=0.55cm and 0.62cm,
+    stage/.style={rectangle, rounded corners=2pt, draw=black!75, thick, fill=black!3, minimum width=1.75cm, minimum height=0.72cm, align=center},
+    decision/.style={rectangle, rounded corners=2pt, draw=black!85, very thick, fill=blue!7, minimum width=1.85cm, minimum height=0.88cm, align=center},
+    action/.style={rectangle, rounded corners=2pt, draw=black!75, thick, fill=green!7, minimum width=1.55cm, minimum height=0.70cm, align=center},
+    fallback/.style={rectangle, rounded corners=2pt, draw=black!75, thick, fill=red!7, minimum width=1.55cm, minimum height=0.70cm, align=center},
+    signal/.style={rectangle, rounded corners=2pt, draw=black!60, fill=yellow!12, minimum width=1.55cm, minimum height=0.58cm, align=center},
+    log/.style={rectangle, rounded corners=2pt, draw=black!60, dashed, fill=black!2, minimum width=2.35cm, minimum height=0.58cm, align=center},
+    flow/.style={->, thick},
+    info/.style={->, dashed, thick, draw=black!60},
+    group/.style={draw=black!30, rounded corners=3pt, inner sep=4pt, fill=black!1}
+]
+
+\node[stage] (sensor) {Sensor\\task};
+\node[stage, right=of sensor] (preprocess) {Pre-\\processing};
+\node[stage, right=of preprocess] (model) {Local model\\+ confidence};
+\node[decision, right=of model] (router) {Routing\\policy};
+
+\node[signal, above=of router] (telemetry) {Queue, urgency,\\link state};
+\node[action, right=0.72cm of router] (local) {Local\\execution};
+\node[action, above=0.35cm of local] (forward) {Peer/relay\\forwarding};
+\node[fallback, below=0.35cm of local] (safe) {Safe\\fallback};
+\node[stage, right=0.68cm of forward] (remote) {Remote\\inference};
+\node[stage, right=0.68cm of local] (actuate) {Operational\\output};
+\node[log, below=0.58cm of router] (audit) {Decision log\\and audit trail};
+
+\draw[flow] (sensor) -- (preprocess);
+\draw[flow] (preprocess) -- (model);
+\draw[flow] (model) -- node[above, font=\tiny] {$\hat{y}, c$} (router);
+\draw[info] (telemetry) -- (router);
+
+\draw[flow] (router) -- node[above, sloped, font=\tiny] {usable confidence} (local);
+\draw[flow] (router) |- node[pos=0.28, above, font=\tiny] {good link} (forward);
+\draw[flow] (router) |- node[pos=0.28, below, font=\tiny] {low confidence or weak link} (safe);
+\draw[flow] (forward) -- (remote);
+\draw[flow] (remote.south) |- (actuate.north);
+\draw[flow] (local) -- (actuate);
+\draw[flow] (safe.east) -| (actuate.south);
+
+\draw[info] (router) -- (audit);
+\draw[info] (local.south) |- (audit.east);
+\draw[info] (forward.south) |- (audit.east);
+\draw[info] (safe.south) |- (audit.east);
+
+\begin{scope}[on background layer]
+    \node[group, fit=(sensor)(preprocess)(model), label={[font=\tiny]above:Edge node inference}] {};
+    \node[group, fit=(forward)(remote), label={[font=\tiny]above:Opportunistic offload}] {};
+    \node[group, fit=(safe), label={[font=\tiny]below:Conservative mode}] {};
+\end{scope}
+
+\end{tikzpicture}

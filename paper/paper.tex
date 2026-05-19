@@ -10,7 +10,7 @@
 \usepackage{tabularx}
 \usepackage{hyperref}
 \usepackage{tikz}
-\usetikzlibrary{positioning}
+\usetikzlibrary{arrows.meta,backgrounds,fit,positioning}
 
 \begin{document}
 
@@ -90,34 +90,9 @@ Figure~\ref{fig:arch} sketches the system. Sensor tasks enter a lightweight prep
 \begin{figure}[t]
 \centering
 \resizebox{\columnwidth}{!}{%
-\begin{tikzpicture}[
-    node distance=0.8cm,
-    block/.style={rectangle, draw, thick, minimum width=2.5cm, minimum height=0.8cm, align=center, font=\small},
-    arrow/.style={-stealth, thick}
-]
-\node[block] (sensor) {Sensor input};
-\node[block, below of=sensor] (preprocess) {Preprocessing};
-\node[block, below of=preprocess] (model) {Local model +\\Uncertainty estimator};
-\node[block, below of=model] (router) {Routing policy engine};
-\node[block, below left=0.8cm and -0.5cm of router] (local) {Local\\execution};
-\node[block, below of=router] (forward) {Forward to\\peer/relay};
-\node[block, below right=0.8cm and -0.5cm of router] (fallback) {Safe fallback\\policy};
-\node[block, below of=local] (actuate) {Actuate};
-\node[block, below of=forward] (remote) {Remote\\inference};
-\node[block, below of=fallback] (safe) {Conservative\\action};
-
-\draw[arrow] (sensor) -- (preprocess);
-\draw[arrow] (preprocess) -- (model);
-\draw[arrow] (model) -- (router);
-\draw[arrow] (router) -- (local);
-\draw[arrow] (router) -- (forward);
-\draw[arrow] (router) -- (fallback);
-\draw[arrow] (local) -- (actuate);
-\draw[arrow] (forward) -- (remote);
-\draw[arrow] (fallback) -- (safe);
-\end{tikzpicture}%
+\input{figures/architecture.tikz}%
 }
-\caption{System architecture: sensor input flows through preprocessing, local inference, and uncertainty estimation before the routing policy chooses among local execution, peer forwarding, or safe fallback.}
+\caption{System architecture: sensor tasks are scored locally, combined with queue and link telemetry, and routed to local execution, peer forwarding, or conservative fallback with audit metadata.}
 \label{fig:arch}
 \end{figure}
 
