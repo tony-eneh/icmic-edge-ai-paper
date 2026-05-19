@@ -1,496 +1,944 @@
 #!/usr/bin/env python3
 # pyright: reportMissingImports=false, reportMissingModuleSource=false
 """
-Complete experimental evaluation for uncertainty-aware edge AI routing.
-Uses real ML model (ResNet18) with CIFAR-10 (ID) and CIFAR-100 (OOD proxy).
+Uncertainty-aware edge AI routing experiment using Kaggle's Ships in Satellite
+Imagery dataset (ShipsNet).
+
+Expected dataset source:
+https://www.kaggle.com/datasets/rhammell/ships-in-satellite-imagery
+
+The script replaces the earlier CIFAR proxy with a maritime vessel-detection
+workflow. It trains a small binary ResNet-18 classifier on ShipsNet, extracts
+confidence traces from held-out satellite chips, creates an adverse maritime
+condition through deterministic weather/visibility corruption, and evaluates
+local/offload/fallback routing policies under stable, intermittent, and degraded
+network conditions.
 """
 
-import torch
-import torchvision.models as models
-import torchvision.datasets as datasets
-import torchvision.transforms as transforms
-from torch.nn.functional import softmax
-import numpy as np
-import pandas as pd
-import matplotlib.pyplot as plt
-import random
+from __future__ import annotations
 from tqdm import tqdm
+from torchvision import models, transforms
+from torch.utils.data import DataLoader, Dataset, Subset
+from torch.nn.functional import softmax
+from PIL import Image, ImageEnhance, ImageFilter
+import torch.nn as nn
+import torch
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+
+import argparse
+import json
+import os
+import random
 import warnings
-warnings.filterwarnings('ignore')
+import zipfile
+from dataclasses import dataclass
+from pathlib import Path
 
-# Set random seeds for reproducibility
+import matplotlib
+
+matplotlib.use("Agg")
+
+
+warnings.filterwarnings("ignore")
+
 SEED = 42
-random.seed(SEED)
-np.random.seed(SEED)
-torch.manual_seed(SEED)
-
-print("=" * 60)
-print("Edge AI Routing Experiments for RQ1")
-print("=" * 60)
-
-# ============================================================================
-# Step 1: Load Model and Datasets
-# ============================================================================
-print("\n[1/5] Loading model and datasets...")
-
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-print(f"Using device: {device}")
-
-# Load pretrained ResNet18
-model = models.resnet18(weights=models.ResNet18_Weights.IMAGENET1K_V1)
-model = model.to(device)
-model.eval()
-
-# Image preprocessing (ResNet expects 224x224)
-transform = transforms.Compose([
-    transforms.Resize(224),
-    transforms.ToTensor(),
-    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-])
-
-# Load datasets (download if not present)
-id_dataset = datasets.CIFAR10(
-    root='./data', train=False, download=True, transform=transform)
-ood_dataset = datasets.CIFAR100(
-    root='./data', train=False, download=True, transform=transform)
-
-print(f"ID dataset (CIFAR-10): {len(id_dataset)} images")
-print(f"OOD dataset (CIFAR-100): {len(ood_dataset)} images")
+IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"}
+KAGGLE_DATASET = "rhammell/ships-in-satellite-imagery"
 
 
-def get_confidence_and_entropy(img_tensor):
-    """Return confidence (max softmax) and entropy from model."""
+@dataclass(frozen=True)
+class ShipSample:
+    image: Image.Image
+    label: int
+    scene_id: str
+    location: str
+    source: str
+
+
+class ShipsNetDataset(Dataset):
+    def __init__(
+        self,
+        samples: list[ShipSample],
+        transform: transforms.Compose,
+        adverse: bool = False,
+    ) -> None:
+        self.samples = samples
+        self.transform = transform
+        self.adverse = adverse
+
+    def __len__(self) -> int:
+        return len(self.samples)
+
+    def __getitem__(self, index: int) -> tuple[torch.Tensor, int]:
+        sample = self.samples[index]
+        image = sample.image.copy()
+        if self.adverse:
+            image = apply_adverse_maritime_condition(image, index)
+        return self.transform(image), sample.label
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Run maritime uncertainty-aware routing experiments with ShipsNet."
+    )
+    parser.add_argument(
+        "--dataset-root",
+        type=Path,
+        default=Path("data/ships-in-satellite-imagery"),
+        help="Directory containing shipsnet.json or an extracted shipsnet/ image folder.",
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=Path("."),
+        help="Directory where result CSV files and figures are written.",
+    )
+    parser.add_argument("--epochs", type=int, default=3)
+    parser.add_argument("--batch-size", type=int, default=64)
+    parser.add_argument("--lr", type=float, default=1e-3)
+    parser.add_argument("--train-fraction", type=float, default=0.7)
+    parser.add_argument("--val-fraction", type=float, default=0.15)
+    parser.add_argument("--max-confidence-samples", type=int, default=500)
+    parser.add_argument("--tasks-per-scenario", type=int, default=2500)
+    parser.add_argument("--adverse-fraction", type=float, default=0.4)
+    parser.add_argument("--safety-sensitive-fraction", type=float, default=0.3)
+    parser.add_argument("--conf-threshold", type=float, default=0.65)
+    parser.add_argument("--confidence-only-threshold",
+                        type=float, default=0.70)
+    parser.add_argument("--bw-threshold", type=float, default=1.8)
+    parser.add_argument("--unsafe-confidence-threshold",
+                        type=float, default=0.60)
+    parser.add_argument(
+        "--fine-tune-backbone",
+        action="store_true",
+        help="Train the full ResNet-18 instead of only the classifier head.",
+    )
+    parser.add_argument(
+        "--checkpoint",
+        type=Path,
+        default=None,
+        help="Optional checkpoint path. If it exists, load it; after training, save to it.",
+    )
+    parser.add_argument(
+        "--no-download-dataset",
+        action="store_true",
+        help="Do not attempt Kaggle download when --dataset-root is missing.",
+    )
+    return parser.parse_args()
+
+
+def set_seed(seed: int = SEED) -> None:
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+
+
+def load_shipsnet_samples(dataset_root: Path, allow_download: bool = True) -> list[ShipSample]:
+    dataset_root = prepare_dataset_root(dataset_root, allow_download)
+
+    if not dataset_root.exists():
+        raise FileNotFoundError(
+            f"Dataset root not found: {dataset_root}\n"
+            f"{dataset_setup_instructions(dataset_root)}"
+        )
+
+    json_path = find_file(dataset_root, "shipsnet.json")
+    if json_path is not None:
+        return load_samples_from_json(json_path)
+
+    image_dir = dataset_root / "shipsnet"
+    shipsnet_zip = find_file(dataset_root, "shipsnet.zip")
+    if not image_dir.exists() and shipsnet_zip is not None:
+        extract_zip(shipsnet_zip, image_dir)
+
+    if image_dir.exists():
+        return load_samples_from_images(image_dir)
+
+    image_files = [path for path in dataset_root.rglob(
+        "*") if path.suffix.lower() in IMAGE_SUFFIXES]
+    if image_files:
+        return load_samples_from_images(dataset_root)
+
+    raise RuntimeError(
+        f"No ShipsNet data found under {dataset_root}. Expected shipsnet.json, "
+        f"shipsnet.zip, or PNG images.\n{dataset_setup_instructions(dataset_root)}"
+    )
+
+
+def prepare_dataset_root(dataset_root: Path, allow_download: bool) -> Path:
+    if dataset_root.exists():
+        return dataset_root
+
+    archive_path = dataset_root.with_suffix(".zip")
+    if archive_path.exists():
+        dataset_root.mkdir(parents=True, exist_ok=True)
+        extract_zip(archive_path, dataset_root)
+    elif allow_download:
+        download_kaggle_dataset(dataset_root)
+    return dataset_root
+
+
+def load_env_file(env_path: Path) -> None:
+    if not env_path.exists():
+        return
+    for raw_line in env_path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip().strip('"').strip("'")
+        if key and key not in os.environ:
+            os.environ[key] = value
+
+
+def configure_kaggle_credentials(repo_root: Path) -> None:
+    load_env_file(repo_root / ".env")
+    load_env_file(Path.cwd() / ".env")
+
+    if os.environ.get("KAGGLE_USERNAME") and os.environ.get("KAGGLE_KEY"):
+        return
+
+    token = os.environ.get("KAGGLE_API_TOKEN")
+    if not token:
+        return
+
+    token_payload = read_kaggle_token_payload(token)
+    if not token_payload:
+        username = os.environ.get("KAGGLE_USERNAME")
+        if username:
+            os.environ.setdefault("KAGGLE_KEY", token)
+        else:
+            print(
+                "Found KAGGLE_API_TOKEN, but it looks like an API key only. "
+                "Add KAGGLE_USERNAME=<your_kaggle_username> to .env, or set "
+                "KAGGLE_API_TOKEN to the full kaggle.json content."
+            )
+        return
+
+    username = token_payload.get("username")
+    key = token_payload.get("key")
+    if username and key:
+        os.environ.setdefault("KAGGLE_USERNAME", str(username))
+        os.environ.setdefault("KAGGLE_KEY", str(key))
+
+
+def read_kaggle_token_payload(token: str) -> dict[str, str] | None:
+    possible_path = Path(token).expanduser()
+    if possible_path.exists():
+        try:
+            return json.loads(possible_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            return None
+
+    try:
+        payload = json.loads(token)
+    except json.JSONDecodeError:
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def download_kaggle_dataset(dataset_root: Path) -> None:
+    if dataset_root.exists():
+        return
+    if not (os.environ.get("KAGGLE_USERNAME") and os.environ.get("KAGGLE_KEY")):
+        return
+
+    try:
+        from kaggle.api.kaggle_api_extended import KaggleApi
+    except ImportError as exc:
+        raise RuntimeError(
+            "Kaggle credentials were found, but the kaggle package is not installed. "
+            "Run `pip install -r requirements.txt` and try again."
+        ) from exc
+
+    dataset_root.mkdir(parents=True, exist_ok=True)
+    print(f"Downloading Kaggle dataset {KAGGLE_DATASET} -> {dataset_root}")
+    api = KaggleApi()
+    api.authenticate()
+    api.dataset_download_files(KAGGLE_DATASET, path=str(
+        dataset_root), unzip=True, quiet=False)
+
+
+def extract_zip(zip_path: Path, destination: Path) -> None:
+    destination.mkdir(parents=True, exist_ok=True)
+    print(f"Extracting {zip_path} -> {destination}")
+    with zipfile.ZipFile(zip_path) as archive:
+        archive.extractall(destination)
+
+
+def dataset_setup_instructions(dataset_root: Path) -> str:
+    return (
+        "Download Kaggle's Ships in Satellite Imagery dataset into the repo first.\n"
+        "This script can auto-download it when .env contains either:\n"
+        "  KAGGLE_USERNAME=<your_username> and KAGGLE_KEY=<your_key>\n"
+        "or:\n"
+        "  KAGGLE_USERNAME=<your_username> and KAGGLE_API_TOKEN=<your_key>\n"
+        "or:\n"
+        "  KAGGLE_API_TOKEN='{\"username\":\"...\",\"key\":\"...\"}'\n"
+        "You can also download it manually with Kaggle CLI:\n"
+        f"  kaggle datasets download -d {KAGGLE_DATASET} -p {dataset_root.as_posix()} --unzip\n"
+        "Then rerun:\n"
+        f"  python experiments/run_edge_ai_routing_experiments.py --dataset-root {dataset_root.as_posix()}\n"
+        "If Kaggle CLI is not installed/configured, run `pip install -r requirements.txt`."
+    )
+
+
+def find_file(root: Path, name: str) -> Path | None:
+    direct = root / name
+    if direct.exists():
+        return direct
+    matches = list(root.rglob(name))
+    return matches[0] if matches else None
+
+
+def load_samples_from_json(json_path: Path) -> list[ShipSample]:
+    print(f"Loading ShipsNet JSON: {json_path}")
+    with json_path.open("r", encoding="utf-8") as handle:
+        payload = json.load(handle)
+
+    data = payload["data"]
+    labels = payload["labels"]
+    scene_ids = payload.get("scene_ids", ["unknown"] * len(labels))
+    locations = payload.get("locations", ["unknown"] * len(labels))
+
+    samples = []
+    for index, pixels in enumerate(tqdm(data, desc="Decoding ShipsNet JSON")):
+        array = np.asarray(pixels, dtype=np.uint8).reshape(
+            3, 80, 80).transpose(1, 2, 0)
+        image = Image.fromarray(array, mode="RGB")
+        samples.append(
+            ShipSample(
+                image=image,
+                label=int(labels[index]),
+                scene_id=str(scene_ids[index]),
+                location=str(locations[index]),
+                source=f"json:{index}",
+            )
+        )
+    return samples
+
+
+def load_samples_from_images(image_root: Path) -> list[ShipSample]:
+    print(f"Loading ShipsNet images from: {image_root}")
+    samples = []
+    for path in tqdm(sorted(image_root.rglob("*")), desc="Reading image files"):
+        if path.suffix.lower() not in IMAGE_SUFFIXES:
+            continue
+        label = infer_label_from_filename(path)
+        if label is None:
+            continue
+        parts = path.stem.split("_")
+        scene_id = parts[1] if len(parts) > 1 else "unknown"
+        location = "_".join(parts[2:]) if len(parts) > 2 else "unknown"
+        samples.append(
+            ShipSample(
+                image=Image.open(path).convert("RGB"),
+                label=label,
+                scene_id=scene_id,
+                location=location,
+                source=str(path),
+            )
+        )
+    if not samples:
+        raise RuntimeError(
+            f"No labeled ShipsNet image files found in {image_root}")
+    return samples
+
+
+def infer_label_from_filename(path: Path) -> int | None:
+    token = path.stem.split("_")[0]
+    if token in {"0", "1"}:
+        return int(token)
+    return None
+
+
+def stratified_split(
+    samples: list[ShipSample], train_fraction: float, val_fraction: float
+) -> tuple[list[int], list[int], list[int]]:
+    by_label: dict[int, list[int]] = {0: [], 1: []}
+    for index, sample in enumerate(samples):
+        by_label[sample.label].append(index)
+
+    rng = random.Random(SEED)
+    train_indices: list[int] = []
+    val_indices: list[int] = []
+    test_indices: list[int] = []
+    for label_indices in by_label.values():
+        rng.shuffle(label_indices)
+        train_end = int(len(label_indices) * train_fraction)
+        val_end = train_end + int(len(label_indices) * val_fraction)
+        train_indices.extend(label_indices[:train_end])
+        val_indices.extend(label_indices[train_end:val_end])
+        test_indices.extend(label_indices[val_end:])
+
+    rng.shuffle(train_indices)
+    rng.shuffle(val_indices)
+    rng.shuffle(test_indices)
+    return train_indices, val_indices, test_indices
+
+
+def build_transforms() -> tuple[transforms.Compose, transforms.Compose]:
+    train_transform = transforms.Compose(
+        [
+            transforms.Resize((112, 112)),
+            transforms.RandomHorizontalFlip(),
+            transforms.RandomVerticalFlip(),
+            transforms.RandomRotation(15),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[
+                                 0.229, 0.224, 0.225]),
+        ]
+    )
+    eval_transform = transforms.Compose(
+        [
+            transforms.Resize((112, 112)),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[
+                                 0.229, 0.224, 0.225]),
+        ]
+    )
+    return train_transform, eval_transform
+
+
+def apply_adverse_maritime_condition(image: Image.Image, index: int) -> Image.Image:
+    rng = random.Random(SEED + index)
+    image = ImageEnhance.Contrast(image).enhance(rng.uniform(0.45, 0.75))
+    image = ImageEnhance.Brightness(image).enhance(rng.uniform(0.55, 0.85))
+    image = image.filter(ImageFilter.GaussianBlur(
+        radius=rng.uniform(0.6, 1.4)))
+
+    array = np.asarray(image).astype(np.float32)
+    haze = np.full_like(array, 205.0)
+    alpha = rng.uniform(0.16, 0.32)
+    array = (1.0 - alpha) * array + alpha * haze
+    noise = np.random.default_rng(SEED + index).normal(0, 8, size=array.shape)
+    array = np.clip(array + noise, 0, 255).astype(np.uint8)
+    return Image.fromarray(array, mode="RGB")
+
+
+def build_model(device: torch.device, train_backbone: bool) -> nn.Module:
+    model = models.resnet18(weights=models.ResNet18_Weights.IMAGENET1K_V1)
+    model.fc = nn.Linear(model.fc.in_features, 2)
+    if not train_backbone:
+        for name, parameter in model.named_parameters():
+            parameter.requires_grad = name.startswith("fc.")
+    return model.to(device)
+
+
+def train_model(
+    model: nn.Module,
+    train_loader: DataLoader,
+    val_loader: DataLoader,
+    args: argparse.Namespace,
+    device: torch.device,
+) -> nn.Module:
+    if args.checkpoint and args.checkpoint.exists():
+        print(f"Loading classifier checkpoint: {args.checkpoint}")
+        model.load_state_dict(torch.load(args.checkpoint, map_location=device))
+        return model
+
+    criterion = nn.CrossEntropyLoss()
+    optimizer = torch.optim.AdamW(
+        [parameter for parameter in model.parameters() if parameter.requires_grad], lr=args.lr
+    )
+
+    for epoch in range(1, args.epochs + 1):
+        model.train()
+        train_loss = 0.0
+        train_correct = 0
+        train_total = 0
+        for images, labels in tqdm(train_loader, desc=f"Training epoch {epoch}/{args.epochs}"):
+            images = images.to(device)
+            labels = labels.to(device)
+            optimizer.zero_grad()
+            logits = model(images)
+            loss = criterion(logits, labels)
+            loss.backward()
+            optimizer.step()
+
+            train_loss += loss.item() * labels.size(0)
+            train_correct += (logits.argmax(dim=1) == labels).sum().item()
+            train_total += labels.size(0)
+
+        val_acc, val_loss = evaluate_classifier(
+            model, val_loader, criterion, device)
+        print(
+            f"  Epoch {epoch}: train_loss={train_loss / train_total:.4f}, "
+            f"train_acc={train_correct / train_total:.3f}, "
+            f"val_loss={val_loss:.4f}, val_acc={val_acc:.3f}"
+        )
+
+    if args.checkpoint:
+        args.checkpoint.parent.mkdir(parents=True, exist_ok=True)
+        torch.save(model.state_dict(), args.checkpoint)
+        print(f"Saved classifier checkpoint: {args.checkpoint}")
+    return model
+
+
+def evaluate_classifier(
+    model: nn.Module, loader: DataLoader, criterion: nn.Module, device: torch.device
+) -> tuple[float, float]:
+    model.eval()
+    correct = 0
+    total = 0
+    total_loss = 0.0
     with torch.no_grad():
-        img_tensor = img_tensor.to(device)
-        logits = model(img_tensor.unsqueeze(0))
-        probs = softmax(logits, dim=1)
-        confidence = probs.max().item()
-        entropy = -torch.sum(probs * torch.log(probs + 1e-8)).item()
-    return confidence, entropy
+        for images, labels in loader:
+            images = images.to(device)
+            labels = labels.to(device)
+            logits = model(images)
+            loss = criterion(logits, labels)
+            total_loss += loss.item() * labels.size(0)
+            correct += (logits.argmax(dim=1) == labels).sum().item()
+            total += labels.size(0)
+    return correct / max(total, 1), total_loss / max(total, 1)
 
 
-# Precompute confidence scores for efficiency (optional, speeds up repeated runs)
-print("Precomputing confidence scores for ID samples...")
-id_confidences = []
-for i in tqdm(range(min(500, len(id_dataset)))):
-    img, _ = id_dataset[i]
-    conf, _ = get_confidence_and_entropy(img)
-    id_confidences.append(conf)
-
-print("Precomputing confidence scores for OOD samples...")
-ood_confidences = []
-for i in tqdm(range(min(500, len(ood_dataset)))):
-    img, _ = ood_dataset[i]
-    conf, _ = get_confidence_and_entropy(img)
-    ood_confidences.append(conf)
-
-print(
-    f"ID mean confidence: {np.mean(id_confidences):.3f} ± {np.std(id_confidences):.3f}")
-print(
-    f"OOD mean confidence: {np.mean(ood_confidences):.3f} ± {np.std(ood_confidences):.3f}")
-
-# ============================================================================
-# Step 2: Experiment 1 - Decision Boundary Mapping
-# ============================================================================
-print("\n[2/5] Running Experiment 1: Decision boundary mapping...")
-
-# Use synthetic grid for clean visualization (based on real confidence ranges)
-confidence_grid = np.linspace(0.1, 0.95, 30)
-bandwidth_grid = np.linspace(0.1, 10, 30)
-
-results_boundary = []
-
-for conf in confidence_grid:
-    for bw in bandwidth_grid:
-        uncertainty = 1 - conf
-
-        # Cost models (calibrated from real system measurements)
-        local_cost = 45 + uncertainty * 120          # ms
-        offload_cost = 25 + (80 / max(bw, 0.1)) + uncertainty * 40
-        fallback_cost = 35 + uncertainty * 180
-
-        costs = {'local': local_cost, 'offload': offload_cost,
-                 'fallback': fallback_cost}
-        best_action = min(costs, key=lambda action: costs[action])
-
-        results_boundary.append({
-            'confidence': conf,
-            'bandwidth': bw,
-            'best_action': best_action
-        })
-
-df_boundary = pd.DataFrame(results_boundary)
-
-# Plot decision boundary
-action_map = {'local': 0, 'offload': 1, 'fallback': 2}
-fig, ax = plt.subplots(figsize=(6, 5))
-scatter = ax.scatter(df_boundary['confidence'], df_boundary['bandwidth'],
-                     c=df_boundary['best_action'].map(action_map),
-                     cmap='RdYlGn', s=20, edgecolors='k', alpha=0.8)
-ax.set_xlabel('Model Confidence', fontsize=11)
-ax.set_ylabel('Effective Bandwidth (Mbps)', fontsize=11)
-ax.set_title('Optimal Action: Local vs. Offload vs. Fallback', fontsize=12)
-cbar = plt.colorbar(scatter, ticks=[0, 1, 2])
-cbar.ax.set_yticklabels(['Local', 'Offload', 'Fallback'])
-ax.axvline(x=0.5, linestyle='--', color='gray',
-           alpha=0.5, label='Confidence threshold')
-ax.axhline(y=2.0, linestyle='--', color='gray',
-           alpha=0.5, label='Bandwidth threshold')
-ax.legend(fontsize=8)
-plt.tight_layout()
-plt.savefig('decision_boundary.pdf', dpi=150, bbox_inches='tight')
-plt.close()
-print("  Saved: decision_boundary.pdf")
-
-# ============================================================================
-# Step 3: Experiment 2 - Baseline Comparison (with REAL ML confidence)
-# ============================================================================
-print("\n[3/5] Running Experiment 2: Baseline comparison (5000 tasks)...")
+def build_confidence_traces(
+    model: nn.Module,
+    samples: list[ShipSample],
+    test_indices: list[int],
+    eval_transform: transforms.Compose,
+    args: argparse.Namespace,
+    device: torch.device,
+) -> pd.DataFrame:
+    model.eval()
+    selected_indices = test_indices[: args.max_confidence_samples]
+    rows = []
+    with torch.no_grad():
+        for index in tqdm(selected_indices, desc="Extracting confidence traces"):
+            sample = samples[index]
+            for condition, adverse in (("nominal", False), ("adverse", True)):
+                image = sample.image.copy()
+                if adverse:
+                    image = apply_adverse_maritime_condition(image, index)
+                tensor = eval_transform(image).unsqueeze(0).to(device)
+                logits = model(tensor)
+                probs = softmax(logits, dim=1).squeeze(0)
+                confidence = float(probs.max().item())
+                predicted = int(probs.argmax().item())
+                entropy = float(-torch.sum(probs *
+                                torch.log(probs + 1e-8)).item())
+                rows.append(
+                    {
+                        "sample_index": index,
+                        "label": sample.label,
+                        "predicted": predicted,
+                        "correct": predicted == sample.label,
+                        "confidence": confidence,
+                        "entropy": entropy,
+                        "condition": condition,
+                        "is_ood": adverse,
+                        "scene_id": sample.scene_id,
+                        "location": sample.location,
+                        "source": sample.source,
+                    }
+                )
+    return pd.DataFrame(rows)
 
 
-def generate_task_with_real_confidence():
-    """Generate a task with real confidence score from actual model inference."""
-    is_ood = random.random() < 0.4  # 40% OOD tasks
-
-    if is_ood:
-        idx = random.randint(0, len(ood_confidences) - 1)
-        confidence = ood_confidences[idx]
-        # Add small noise to avoid identical values
-        confidence = np.clip(
-            confidence + np.random.normal(0, 0.02), 0.05, 0.95)
-    else:
-        idx = random.randint(0, len(id_confidences) - 1)
-        confidence = id_confidences[idx]
-        confidence = np.clip(confidence + np.random.normal(0, 0.02), 0.3, 0.99)
-
-    safety_sensitive = random.random() < 0.3
-    return confidence, is_ood, safety_sensitive
-
-
-def simulate_network(scenario):
-    """Generate network conditions based on scenario."""
-    if scenario == 'stable':
-        bandwidth = np.random.uniform(5, 12)
-        peer_available = random.random() > 0.1
-        loss_rate = 0.03
-        latency_base = 20
-    elif scenario == 'intermittent':
-        bandwidth = np.random.uniform(0.8, 6)
-        peer_available = random.random() > 0.3
-        loss_rate = 0.12
-        latency_base = 40
-    else:  # degraded
-        bandwidth = np.random.uniform(0.2, 2.5)
-        peer_available = random.random() > 0.6
-        loss_rate = 0.30
-        latency_base = 80
-    return bandwidth, peer_available, loss_rate, latency_base
-
-# Policy implementations
+def plot_decision_boundary(args: argparse.Namespace, output_dir: Path) -> None:
+    confidence_grid = np.linspace(0.05, 0.99, 60)
+    bandwidth_grid = np.linspace(0.1, 10.0, 60)
+    rows = []
+    for confidence in confidence_grid:
+        for bandwidth in bandwidth_grid:
+            task = {"confidence": confidence,
+                    "bandwidth": bandwidth, "peer_available": True}
+            rows.append(
+                {
+                    "confidence": confidence,
+                    "bandwidth": bandwidth,
+                    "action": policy_three_way(task, args.conf_threshold, args.bw_threshold),
+                }
+            )
+    boundary = pd.DataFrame(rows)
+    action_map = {"local": 0, "offload": 1, "fallback": 2}
+    fig, ax = plt.subplots(figsize=(6, 5))
+    scatter = ax.scatter(
+        boundary["confidence"],
+        boundary["bandwidth"],
+        c=boundary["action"].map(action_map),
+        cmap="RdYlGn",
+        s=12,
+        alpha=0.85,
+    )
+    ax.axvline(args.conf_threshold, linestyle="--", color="gray", alpha=0.7)
+    ax.axhline(args.bw_threshold, linestyle="--", color="gray", alpha=0.7)
+    ax.set_xlabel("Vessel classifier confidence")
+    ax.set_ylabel("Effective bandwidth (Mbps)")
+    ax.set_title("Three-way routing regions")
+    cbar = plt.colorbar(scatter, ticks=[0, 1, 2])
+    cbar.ax.set_yticklabels(["Local", "Offload", "Fallback"])
+    plt.tight_layout()
+    plt.savefig(output_dir / "decision_boundary.pdf",
+                dpi=150, bbox_inches="tight")
+    plt.close()
 
 
-def policy_always_local(task):
-    return 'local'
+def generate_task(confidence_traces: pd.DataFrame, args: argparse.Namespace) -> dict[str, object]:
+    adverse = random.random() < args.adverse_fraction
+    pool = confidence_traces[confidence_traces["is_ood"] == adverse]
+    if pool.empty:
+        pool = confidence_traces
+    row = pool.sample(n=1, random_state=random.randint(0, 2**31 - 1)).iloc[0]
+    confidence = float(
+        np.clip(row["confidence"] + np.random.normal(0, 0.015), 0.01, 0.99))
+    return {
+        "confidence": confidence,
+        "entropy": float(row["entropy"]),
+        "is_ood": bool(row["is_ood"]),
+        "condition": row["condition"],
+        "label": int(row["label"]),
+        "predicted": int(row["predicted"]),
+        "correct": bool(row["correct"]),
+        "safety_sensitive": random.random() < args.safety_sensitive_fraction,
+    }
 
 
-def policy_always_offload(task):
-    return 'offload' if task['peer_available'] else 'local'
+def simulate_network(scenario: str) -> tuple[float, bool, float, float]:
+    if scenario == "stable":
+        return np.random.uniform(5, 12), random.random() > 0.1, 0.03, 20.0
+    if scenario == "intermittent":
+        return np.random.uniform(0.8, 6), random.random() > 0.3, 0.12, 40.0
+    return np.random.uniform(0.2, 2.5), random.random() > 0.6, 0.30, 80.0
 
 
-def policy_confidence_threshold(task, threshold=0.55):
-    return 'offload' if task['confidence'] < threshold else 'local'
+def policy_always_local(task: dict[str, object]) -> str:
+    return "local"
 
 
-def policy_load_only(task):
-    """Forwards under queue pressure (simulated) but ignores confidence."""
-    return 'offload' if task.get('queue_pressure', 0) > 0.5 and task['peer_available'] else 'local'
+def policy_always_offload(task: dict[str, object]) -> str:
+    return "offload" if task["peer_available"] else "local"
 
 
-def policy_three_way(task, conf_threshold=0.48, bw_threshold=1.8):
-    """Our uncertainty-aware three-way policy."""
-    conf = task['confidence']
-    bw = task['bandwidth']
-    peer = task['peer_available']
-
-    if conf < conf_threshold and bw < bw_threshold:
-        return 'fallback'
-    elif bw > bw_threshold and peer:
-        return 'offload'
-    else:
-        return 'local'
+def policy_confidence_threshold(task: dict[str, object], threshold: float) -> str:
+    return "offload" if float(task["confidence"]) < threshold else "local"
 
 
-def compute_cost(action, task, loss_rate, latency_base):
-    """Compute latency and safety cost for an action."""
-    confidence = task['confidence']
-    safety_sensitive = task['safety_sensitive']
-    bandwidth = task['bandwidth']
-    peer_available = task['peer_available']
+def policy_load_only(task: dict[str, object]) -> str:
+    return "offload" if float(task["queue_pressure"]) > 0.5 and task["peer_available"] else "local"
 
-    if action == 'local':
+
+def policy_three_way(task: dict[str, object], conf_threshold: float, bw_threshold: float) -> str:
+    confidence = float(task["confidence"])
+    bandwidth = float(task["bandwidth"])
+    peer_available = bool(task["peer_available"])
+    if confidence < conf_threshold and bandwidth < bw_threshold:
+        return "fallback"
+    if bandwidth > bw_threshold and peer_available:
+        return "offload"
+    return "local"
+
+
+def compute_cost(
+    action: str, task: dict[str, object], loss_rate: float, latency_base: float, args: argparse.Namespace
+) -> tuple[float, bool, float]:
+    confidence = float(task["confidence"])
+    safety_sensitive = bool(task["safety_sensitive"])
+    bandwidth = float(task["bandwidth"])
+    peer_available = bool(task["peer_available"])
+    model_wrong = not bool(task["correct"])
+
+    if action == "local":
         latency = 35 + (1 - confidence) * 80
-        is_unsafe = safety_sensitive and confidence < 0.45
-        energy = 0.5  # J (normalized)
-    elif action == 'offload':
+        is_unsafe = safety_sensitive and (
+            confidence < args.unsafe_confidence_threshold or model_wrong)
+        energy = 0.5
+    elif action == "offload":
         if not peer_available or random.random() < loss_rate:
-            # Offload failed
             latency = 180 + latency_base
-            is_unsafe = safety_sensitive  # failed offload = no decision
+            is_unsafe = safety_sensitive
             energy = 0.8
         else:
-            # Successful offload
             latency = latency_base + (50 / max(bandwidth, 0.2))
             is_unsafe = False
             energy = 0.6
-    else:  # fallback
-        latency = 45
+    else:
+        latency = 45.0
         is_unsafe = False
         energy = 0.2
-
     return latency, is_unsafe, energy
 
 
-# Run experiment
-n_tasks_per_scenario = 2500
-scenarios = ['stable', 'intermittent', 'degraded']
-policies = {
-    'Always Local': policy_always_local,
-    'Always Offload': policy_always_offload,
-    'Confidence Threshold': lambda t: policy_confidence_threshold(t, 0.55),
-    'Load Only': policy_load_only,
-    'Three-Way (Ours)': lambda t: policy_three_way(t, 0.48, 1.8)
-}
+def run_routing_experiment(confidence_traces: pd.DataFrame, args: argparse.Namespace) -> pd.DataFrame:
+    policies = {
+        "Always Local": policy_always_local,
+        "Always Offload": policy_always_offload,
+        "Confidence Threshold": lambda task: policy_confidence_threshold(
+            task, args.confidence_only_threshold
+        ),
+        "Load Only": policy_load_only,
+        "Three-Way (Ours)": lambda task: policy_three_way(
+            task, args.conf_threshold, args.bw_threshold
+        ),
+    }
+    results = []
+    for scenario in ["stable", "intermittent", "degraded"]:
+        print(f"  Running {scenario} scenario...")
+        for policy_name, policy_fn in policies.items():
+            for _ in range(args.tasks_per_scenario):
+                task = generate_task(confidence_traces, args)
+                bandwidth, peer_available, loss_rate, latency_base = simulate_network(
+                    scenario)
+                queue_pressure = np.random.beta(
+                    2, 5) if scenario == "stable" else np.random.beta(5, 2)
+                task.update(
+                    {
+                        "bandwidth": bandwidth,
+                        "peer_available": peer_available,
+                        "queue_pressure": queue_pressure,
+                    }
+                )
+                action = policy_fn(task)
+                latency, is_unsafe, energy = compute_cost(
+                    action, task, loss_rate, latency_base, args)
+                results.append(
+                    {
+                        "policy": policy_name,
+                        "scenario": scenario,
+                        "action": action,
+                        "latency": latency,
+                        "is_unsafe": is_unsafe,
+                        "energy": energy,
+                        "confidence": task["confidence"],
+                        "entropy": task["entropy"],
+                        "is_ood": task["is_ood"],
+                        "condition": task["condition"],
+                        "label": task["label"],
+                        "predicted": task["predicted"],
+                        "correct": task["correct"],
+                    }
+                )
+    return pd.DataFrame(results)
 
-all_results = []
 
-for scenario in scenarios:
-    print(f"  Running {scenario} scenario...")
-    for policy_name, policy_fn in policies.items():
-        for task_id in range(n_tasks_per_scenario):
-            # Generate task with real confidence
-            confidence, is_ood, safety_sensitive = generate_task_with_real_confidence()
+def summarize_results(df_results: pd.DataFrame, output_dir: Path) -> tuple[pd.DataFrame, pd.DataFrame]:
+    summary = df_results.groupby(["policy", "scenario"]).agg(
+        {"latency": "mean", "is_unsafe": "mean", "energy": "mean"}
+    )
+    summary = summary.round(3)
+    summary.columns = ["Latency (ms)", "Unsafe Rate", "Energy (J)"]
 
-            # Simulate network
-            bandwidth, peer_available, loss_rate, latency_base = simulate_network(
-                scenario)
+    action_dist = df_results.groupby(
+        ["policy", "scenario", "action"]).size().unstack(fill_value=0)
+    action_dist_pct = action_dist.div(
+        action_dist.sum(axis=1), axis=0).round(3) * 100
 
-            # Simulate queue pressure (for load-only policy)
-            queue_pressure = np.random.beta(
-                2, 5) if scenario == 'stable' else np.random.beta(5, 2)
+    summary.to_csv(output_dir / "results_summary.csv")
+    action_dist_pct.to_csv(output_dir / "action_distribution.csv")
+    df_results.to_csv(output_dir / "full_results.csv", index=False)
+    return summary, action_dist_pct
 
-            task = {
-                'confidence': confidence,
-                'bandwidth': bandwidth,
-                'peer_available': peer_available,
-                'safety_sensitive': safety_sensitive,
-                'is_ood': is_ood,
-                'queue_pressure': queue_pressure
-            }
 
-            # Get action from policy
-            action = policy_fn(task)
+def plot_fallback_analysis(df_results: pd.DataFrame, args: argparse.Namespace, output_dir: Path) -> None:
+    three_way = df_results[df_results["policy"] == "Three-Way (Ours)"]
+    fallback_tasks = three_way[three_way["action"] == "fallback"]
+    print(f"Total fallback events: {len(fallback_tasks)}")
+    print(f"Fallback rate: {len(fallback_tasks) / max(len(three_way), 1):.2%}")
 
-            # Compute cost
-            latency, is_unsafe, energy = compute_cost(
-                action, task, loss_rate, latency_base)
+    fig, axes = plt.subplots(1, 3, figsize=(12, 4))
+    axes[0].hist(fallback_tasks["confidence"], bins=20,
+                 edgecolor="black", color="red", alpha=0.7)
+    axes[0].axvline(args.conf_threshold, linestyle="--",
+                    color="blue", label="Confidence threshold")
+    axes[0].set_xlabel("Vessel classifier confidence")
+    axes[0].set_ylabel("Fallback count")
+    axes[0].set_title("(a) Confidence at fallback")
+    axes[0].legend(fontsize=8)
 
-            all_results.append({
-                'policy': policy_name,
-                'scenario': scenario,
-                'action': action,
-                'latency': latency,
-                'is_unsafe': is_unsafe,
-                'energy': energy,
-                'confidence': confidence,
-                'is_ood': is_ood
-            })
+    scenario_fallback = three_way.groupby("scenario")["action"].apply(
+        lambda values: (values == "fallback").mean())
+    scenario_fallback.reindex(["stable", "intermittent", "degraded"]).plot(
+        kind="bar", ax=axes[1], color=["green", "orange", "red"]
+    )
+    axes[1].set_xlabel("Network scenario")
+    axes[1].set_ylabel("Fallback rate")
+    axes[1].set_title("(b) Fallback by scenario")
+    axes[1].set_ylim(0, max(0.5, float(scenario_fallback.max()) + 0.05))
 
-df_results = pd.DataFrame(all_results)
-print(f"  Total tasks processed: {len(df_results)}")
+    action_by_condition = three_way.groupby(
+        ["condition", "action"]).size().unstack(fill_value=0)
+    action_by_condition = action_by_condition.div(
+        action_by_condition.sum(axis=1), axis=0)
+    action_by_condition = action_by_condition.reindex(
+        ["nominal", "adverse"], fill_value=0.0)
+    for action in ["local", "offload", "fallback"]:
+        if action not in action_by_condition.columns:
+            action_by_condition[action] = 0.0
 
-# Generate summary table
-summary = df_results.groupby(['policy', 'scenario']).agg({
-    'latency': 'mean',
-    'is_unsafe': 'mean',
-    'energy': 'mean'
-}).round(3)
-summary.columns = ['Latency (ms)', 'Unsafe Rate', 'Energy (J)']
+    bottom = np.zeros(len(action_by_condition))
+    colors = {"local": "green", "offload": "blue", "fallback": "red"}
+    x = np.arange(len(action_by_condition))
+    for action in ["local", "offload", "fallback"]:
+        values = action_by_condition[action].to_numpy()
+        axes[2].bar(x, values, bottom=bottom,
+                    label=action.title(), color=colors[action])
+        bottom += values
+    axes[2].set_xticks(x)
+    axes[2].set_xticklabels([label.title()
+                            for label in action_by_condition.index])
+    axes[2].set_ylabel("Action rate")
+    axes[2].set_title("(c) Actions by image condition")
+    axes[2].legend(fontsize=8)
 
-# Add action distribution
-action_dist = df_results.groupby(
-    ['policy', 'scenario', 'action']).size().unstack(fill_value=0)
-action_dist_pct = action_dist.div(
-    action_dist.sum(axis=1), axis=0).round(3) * 100
+    plt.tight_layout()
+    plt.savefig(output_dir / "fallback_analysis.pdf",
+                dpi=150, bbox_inches="tight")
+    plt.close()
 
-print("\n" + "=" * 60)
-print("RESULTS SUMMARY")
-print("=" * 60)
-print("\nLatency and Unsafe Rate:")
-print(summary.to_string())
 
-# Save to CSV
-summary.to_csv('results_summary.csv')
-action_dist_pct.to_csv('action_distribution.csv')
+def write_latex_table(summary: pd.DataFrame, action_dist_pct: pd.DataFrame, output_dir: Path) -> None:
+    intermittent = summary[summary.index.get_level_values(
+        "scenario") == "intermittent"]
+    lines = [
+        "\\begin{table}[t]",
+        "\\centering",
+        "\\caption{Performance comparison under intermittent maritime connectivity}",
+        "\\label{tab:main_results}",
+        "\\footnotesize",
+        "\\begin{tabular}{@{}lcccc@{}}",
+        "\\toprule",
+        "\\textbf{Policy} & \\textbf{Latency (ms)} & \\textbf{Unsafe Rate} & \\textbf{Energy (J)} & \\textbf{Fallback Rate} \\\\",
+        "\\midrule",
+    ]
+    for policy in intermittent.index.get_level_values("policy").unique():
+        row = intermittent.loc[(policy, "intermittent")]
+        fallback_pct = 0.0
+        if "fallback" in action_dist_pct.columns:
+            fallback_pct = float(
+                action_dist_pct.loc[(policy, "intermittent"), "fallback"])
+        lines.append(
+            f"{policy} & {row['Latency (ms)']:.1f} & {row['Unsafe Rate']:.1%} & "
+            f"{row['Energy (J)']:.2f} & {fallback_pct / 100:.1%} \\\\"
+        )
+    lines.extend(["\\bottomrule", "\\end{tabular}", "\\end{table}"])
+    (output_dir / "latex_table.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
-# ============================================================================
-# Step 4: Experiment 3 - Fallback Trigger Analysis
-# ============================================================================
-print("\n[4/5] Running Experiment 3: Fallback trigger analysis...")
 
-fallback_tasks = df_results[(df_results['policy'] == 'Three-Way (Ours)') &
-                            (df_results['action'] == 'fallback')]
+def print_key_statistics(df_results: pd.DataFrame) -> None:
+    three_way = df_results[df_results["policy"] == "Three-Way (Ours)"]
+    always_local = df_results[df_results["policy"] == "Always Local"]
+    confidence_threshold = df_results[df_results["policy"]
+                                      == "Confidence Threshold"]
+    three_way_int = three_way[three_way["scenario"] == "intermittent"]
+    local_int = always_local[always_local["scenario"] == "intermittent"]
+    threshold_int = confidence_threshold[confidence_threshold["scenario"]
+                                         == "intermittent"]
 
-print(f"Total fallback events: {len(fallback_tasks)}")
-print(
-    f"Fallback rate: {len(fallback_tasks)/len(df_results[df_results['policy']=='Three-Way (Ours)']):.2%}")
+    local_unsafe = local_int["is_unsafe"].mean()
+    threshold_unsafe = threshold_int["is_unsafe"].mean()
+    ours_unsafe = three_way_int["is_unsafe"].mean()
+    reduction_vs_local = 0.0 if local_unsafe == 0 else (
+        local_unsafe - ours_unsafe) / local_unsafe
+    reduction_vs_threshold = 0.0 if threshold_unsafe == 0 else (
+        threshold_unsafe - ours_unsafe) / threshold_unsafe
 
-# Confidence distribution when fallback triggered
-fig, axes = plt.subplots(1, 3, figsize=(12, 4))
+    print("\n" + "=" * 60)
+    print("KEY STATISTICS FOR PAPER")
+    print("=" * 60)
+    print("\nUnder intermittent connectivity:")
+    print(f"  - Three-way unsafe rate: {ours_unsafe:.1%}")
+    print(f"  - Always local unsafe rate: {local_unsafe:.1%}")
+    print(f"  - Confidence threshold unsafe rate: {threshold_unsafe:.1%}")
+    print(f"  - Unsafe reduction vs. always local: {reduction_vs_local:.1%}")
+    print(
+        f"  - Unsafe reduction vs. confidence threshold: {reduction_vs_threshold:.1%}")
+    print(
+        f"  - Fallback rate: {(three_way_int['action'] == 'fallback').mean():.1%}")
 
-# Plot 1: Confidence histogram
-axes[0].hist(fallback_tasks['confidence'], bins=20,
-             edgecolor='black', color='red', alpha=0.7)
-axes[0].axvline(x=0.48, linestyle='--', color='blue',
-                label='Confidence threshold')
-axes[0].set_xlabel('Model Confidence')
-axes[0].set_ylabel('Fallback Count')
-axes[0].set_title('(a) Confidence when fallback triggered')
-axes[0].legend()
+    print("\nThree-Way by image condition:")
+    for condition, group in three_way.groupby("condition"):
+        print(
+            f"  - {condition}: confidence={group['confidence'].mean():.3f}, "
+            f"fallback={(group['action'] == 'fallback').mean():.1%}, "
+            f"unsafe={group['is_unsafe'].mean():.1%}"
+        )
 
-# Plot 2: Fallback by scenario
-scenario_fallback = df_results[df_results['policy'] == 'Three-Way (Ours)'].groupby(
-    'scenario')['action'].apply(lambda x: (x == 'fallback').mean())
-scenario_fallback.plot(kind='bar', ax=axes[1], color=[
-                       'green', 'orange', 'red'])
-axes[1].set_xlabel('Network Scenario')
-axes[1].set_ylabel('Fallback Rate')
-axes[1].set_title('(b) Fallback rate by scenario')
-axes[1].set_ylim(0, 0.5)
 
-# Plot 3: Fallback by input type (ID vs OOD)
-ood_fallback = df_results[(df_results['policy'] == 'Three-Way (Ours)') &
-                          (df_results['is_ood'] == True)]['action'].value_counts(normalize=True)
-id_fallback = df_results[(df_results['policy'] == 'Three-Way (Ours)') &
-                         (df_results['is_ood'] == False)]['action'].value_counts(normalize=True)
+def main() -> None:
+    args = parse_args()
+    set_seed()
+    args.output_dir.mkdir(parents=True, exist_ok=True)
+    repo_root = Path(__file__).resolve().parents[1]
+    configure_kaggle_credentials(repo_root)
 
-x = np.arange(2)
-width = 0.35
-axes[2].bar(x - width/2, [id_fallback.get('fallback', 0), ood_fallback.get('fallback', 0)],
-            width, label='Fallback', color='red')
-axes[2].bar(x + width/2, [id_fallback.get('local', 0), ood_fallback.get('local', 0)],
-            width, label='Local', color='green')
-axes[2].bar(x + width/2, [id_fallback.get('offload', 0), ood_fallback.get('offload', 0)],
-            width, label='Offload', color='blue', bottom=[id_fallback.get('local', 0), ood_fallback.get('local', 0)])
-axes[2].set_xticks(x)
-axes[2].set_xticklabels(['In-Distribution', 'Out-of-Distribution'])
-axes[2].set_ylabel('Rate')
-axes[2].set_title('(c) Action distribution by input type')
-axes[2].legend()
+    print("=" * 60)
+    print("ShipsNet Edge AI Routing Experiments")
+    print("=" * 60)
+    print(f"Dataset root: {args.dataset_root}")
+    print(f"Output dir: {args.output_dir.resolve()}")
 
-plt.tight_layout()
-plt.savefig('fallback_analysis.pdf', dpi=150, bbox_inches='tight')
-plt.close()
-print("  Saved: fallback_analysis.pdf")
+    samples = load_shipsnet_samples(
+        args.dataset_root, allow_download=not args.no_download_dataset)
+    labels = pd.Series([sample.label for sample in samples]
+                       ).value_counts().sort_index()
+    print(f"Loaded {len(samples)} image chips")
+    print(f"Class counts: no-ship={labels.get(0, 0)}, ship={labels.get(1, 0)}")
 
-# ============================================================================
-# Step 5: Generate LaTeX Tables and Final Report
-# ============================================================================
-print("\n[5/5] Generating LaTeX tables and final report...")
+    train_indices, val_indices, test_indices = stratified_split(
+        samples, args.train_fraction, args.val_fraction
+    )
+    print(
+        f"Split sizes: train={len(train_indices)}, val={len(val_indices)}, test={len(test_indices)}"
+    )
 
-# Generate LaTeX table for main results (intermittent scenario only)
-intermittent_summary = summary[summary.index.get_level_values(
-    'scenario') == 'intermittent']
+    train_transform, eval_transform = build_transforms()
+    train_dataset = Subset(ShipsNetDataset(
+        samples, train_transform), train_indices)
+    val_dataset = Subset(ShipsNetDataset(samples, eval_transform), val_indices)
+    train_loader = DataLoader(
+        train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=0)
+    val_loader = DataLoader(
+        val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=0)
 
-latex_table = r"""
-\begin{table}[t]
-\centering
-\caption{Performance comparison under intermittent connectivity (70\% packet delivery, varying bandwidth)}
-\label{tab:main_results}
-\footnotesize
-\begin{tabular}{@{}lcccc@{}}
-\toprule
-\textbf{Policy} & \textbf{Latency (ms)} & \textbf{Unsafe Rate} & \textbf{Energy (J)} & \textbf{Fallback Rate} \\
-\midrule
-"""
-for policy in intermittent_summary.index.get_level_values('policy').unique():
-    row = intermittent_summary.loc[(policy, 'intermittent')]
-    fallback_rate = 0.0
-    if 'fallback' in action_dist_pct.columns:
-        fallback_pct = action_dist_pct.loc[(
-            policy, 'intermittent'), 'fallback']
-        fallback_rate = float(str(fallback_pct)) / 100
-    latex_table += f"{policy} & {row['Latency (ms)']:.1f} & {row['Unsafe Rate']:.1%} & {row['Energy (J)']:.2f} & {fallback_rate:.1%} \\\\\n"
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"Using device: {device}")
+    model = build_model(device, args.fine_tune_backbone)
 
-latex_table += r"""\bottomrule
-\end{tabular}
-\end{table}
-"""
+    print("\n[1/5] Training maritime vessel classifier...")
+    model = train_model(model, train_loader, val_loader, args, device)
 
-print("\n" + "=" * 60)
-print("LATEX TABLE FOR YOUR PAPER")
-print("=" * 60)
-print(latex_table)
+    print("\n[2/5] Extracting nominal and adverse-condition confidence traces...")
+    confidence_traces = build_confidence_traces(
+        model, samples, test_indices, eval_transform, args, device)
+    confidence_traces.to_csv(
+        args.output_dir / "confidence_traces.csv", index=False)
+    print(confidence_traces.groupby("condition")[
+          "confidence"].agg(["count", "mean", "std"]).to_string())
+    print(confidence_traces.groupby("condition")[
+          "correct"].mean().rename("accuracy").to_string())
 
-# Save LaTeX table to file
-with open('latex_table.txt', 'w') as f:
-    f.write(latex_table)
+    print("\n[3/5] Plotting routing decision boundary...")
+    plot_decision_boundary(args, args.output_dir)
+    print("  Saved: decision_boundary.pdf")
 
-# Generate final statistics
-print("\n" + "=" * 60)
-print("KEY STATISTICS FOR PAPER")
-print("=" * 60)
+    print("\n[4/5] Running routing baseline comparison...")
+    df_results = run_routing_experiment(confidence_traces, args)
+    print(f"  Total tasks processed: {len(df_results)}")
+    summary, action_dist_pct = summarize_results(df_results, args.output_dir)
+    print(summary.to_string())
 
-three_way = df_results[df_results['policy'] == 'Three-Way (Ours)']
-always_local = df_results[df_results['policy'] == 'Always Local']
-confidence_thresh = df_results[df_results['policy'] == 'Confidence Threshold']
+    print("\n[5/5] Plotting fallback analysis and writing paper table...")
+    plot_fallback_analysis(df_results, args, args.output_dir)
+    write_latex_table(summary, action_dist_pct, args.output_dir)
+    print_key_statistics(df_results)
 
-# Under intermittent only
-three_way_int = three_way[three_way['scenario'] == 'intermittent']
-local_int = always_local[always_local['scenario'] == 'intermittent']
-thresh_int = confidence_thresh[confidence_thresh['scenario'] == 'intermittent']
+    print("\nGenerated files:")
+    print("  - confidence_traces.csv")
+    print("  - decision_boundary.pdf")
+    print("  - fallback_analysis.pdf")
+    print("  - results_summary.csv")
+    print("  - action_distribution.csv")
+    print("  - full_results.csv")
+    print("  - latex_table.txt")
+    print("\nEXPERIMENTS COMPLETE")
 
-unsafe_reduction_vs_local = (local_int['is_unsafe'].mean(
-) - three_way_int['is_unsafe'].mean()) / local_int['is_unsafe'].mean()
-unsafe_reduction_vs_thresh = (thresh_int['is_unsafe'].mean(
-) - three_way_int['is_unsafe'].mean()) / thresh_int['is_unsafe'].mean()
-latency_increase_vs_local = three_way_int['latency'].mean(
-) - local_int['latency'].mean()
-fallback_rate = (three_way_int['action'] == 'fallback').mean()
 
-print(f"\nUnder intermittent connectivity:")
-print(f"  - Three-way unsafe rate: {three_way_int['is_unsafe'].mean():.1%}")
-print(f"  - Always local unsafe rate: {local_int['is_unsafe'].mean():.1%}")
-print(
-    f"  - Confidence threshold unsafe rate: {thresh_int['is_unsafe'].mean():.1%}")
-print(
-    f"  - Unsafe reduction vs. always local: {unsafe_reduction_vs_local:.1%}")
-print(
-    f"  - Unsafe reduction vs. confidence threshold: {unsafe_reduction_vs_thresh:.1%}")
-print(
-    f"  - Latency increase vs. always local: {latency_increase_vs_local:.1f} ms")
-print(f"  - Fallback rate: {fallback_rate:.1%}")
-
-# OOD vs ID analysis
-three_way_ood = three_way[three_way['is_ood'] == True]
-three_way_id = three_way[three_way['is_ood'] == False]
-print(f"\nUnder OOD inputs (distribution shift):")
-print(
-    f"  - Fallback rate on OOD: {(three_way_ood['action'] == 'fallback').mean():.1%}")
-print(
-    f"  - Fallback rate on ID: {(three_way_id['action'] == 'fallback').mean():.1%}")
-print(f"  - Unsafe rate on OOD: {three_way_ood['is_unsafe'].mean():.1%}")
-print(f"  - Unsafe rate on ID: {three_way_id['is_unsafe'].mean():.1%}")
-
-# Save all results
-df_results.to_csv('full_results.csv', index=False)
-print("\nSaved: full_results.csv, results_summary.csv, action_distribution.csv")
-
-print("\n" + "=" * 60)
-print("EXPERIMENTS COMPLETE!")
-print("=" * 60)
-print("\nGenerated files:")
-print("  - decision_boundary.pdf      (Figure 1 for paper)")
-print("  - fallback_analysis.pdf      (Figure 2 for paper)")
-print("  - results_summary.csv        (Raw numbers)")
-print("  - latex_table.txt            (Copy-paste into paper)")
-print("  - full_results.csv           (Complete dataset)")
+if __name__ == "__main__":
+    main()
