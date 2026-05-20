@@ -15,18 +15,29 @@
 \begin{document}
 
 % \title{Fallback-Aware Task Routing for Resilient Edge AI in Mobile and Maritime Networks}
-\title{Confidence- and Link-Aware Task Routing for Resilient Maritime Edge AI}
 
-\author{%
-\IEEEauthorblockN{Anthony Uchenna Eneh\IEEEauthorrefmark{1}, Love Allen Chijioke Ahakonye\IEEEauthorrefmark{2}, Jae-Min Lee\IEEEauthorrefmark{1}, Dong-Seong Kim\IEEEauthorrefmark{3}}
-\IEEEauthorblockA{\IEEEauthorrefmark{1}IT Convergence Engineering, Kumoh National Institute of Technology, Gumi, South Korea}
-\IEEEauthorblockA{\IEEEauthorrefmark{2}ICT Convergence Research Center, Kumoh National Institute of Technology, Gumi, South Korea}
-\IEEEauthorblockA{\IEEEauthorrefmark{3}IT Convergence Engineering \& NSLab Co., Ltd., Kumoh National Institute of Technology, Gumi, South Korea}
-}
+\title{Confidence and Link-Aware Task Routing for Resilient Maritime Edge AI}
+
+\title{CONFROUTE: Confidence-Aware Routing for Resilient Maritime Edge AI}
+
+\author{\IEEEauthorblockN{Anthony Uchenna Eneh$^{1}$, Love Allen Chijioke Ahakonye$^{2}$, Jae Min Lee$^{1}$, Dong-Seong Kim$^{1,\ast}$}
+\IEEEauthorblockA{$^{1}$IT-Convergence Engineering, \textit{Kumoh National Institute of Technology}, Gumi, South Korea\\
+$^{2}$ICT Convergence Research Center, \textit{Kumoh National Institute of Technology}, Gumi, South Korea\\
+$^{\ast}$NSLab Co. Ltd., Gumi, South Korea,
+\textit{Kumoh National Institute of Technology}, Gumi, South Korea\\
+\{anthony.u.eneh@gmail.com, (loveahakonye, ljmpaul, dskim)\}@kumoh.ac.kr}}
+
+% \author{%
+% \IEEEauthorblockN{Anthony Uchenna Eneh\IEEEauthorrefmark{1}, Love Allen Chijioke Ahakonye\IEEEauthorrefmark{2}, Jae-Min Lee\IEEEauthorrefmark{1}, Dong-Seong Kim\IEEEauthorrefmark{3}}
+% \IEEEauthorblockA{\IEEEauthorrefmark{1}IT Convergence Engineering, Kumoh National Institute of Technology, Gumi, South Korea}
+% \IEEEauthorblockA{\IEEEauthorrefmark{2}ICT Convergence Research Center, Kumoh National Institute of Technology, Gumi, South Korea}
+% \IEEEauthorblockA{\IEEEauthorrefmark{3}IT Convergence Engineering \& NSLab Co., Ltd., Kumoh National Institute of Technology, Gumi, South Korea}
+% }
 \maketitle
 
 \begin{abstract}
-Mobile and maritime edge AI must operate with intermittent links, constrained compute, heterogeneous link quality, and input shift. This paper proposes an uncertainty-aware task router that chooses local inference, peer or relay forwarding, or conservative fallback from model confidence, queue pressure, urgency, and link state. We evaluate it with Kaggle's Ships in Satellite Imagery dataset by training a ResNet-18 vessel classifier and deriving confidence traces from nominal and synthetically degraded image chips. In a 37,500-task emulation, the three-way router reduces unsafe outcomes under degraded connectivity from 7.3\% for always-local and 6.8\% for always-offload execution to 4.8\%, while using fallback for 7.6\% of tasks. Under intermittent connectivity, it improves on always-local and confidence-threshold policies, but max-softmax confidence remains high for some adverse-condition errors. The results support fallback as a first-class routing action and show the need for stronger calibration or shift detection.
+Mobile and maritime edge Artificial Intelligence systems operate under intermittent connectivity, constrained onboard compute, and shifting sensor conditions caused by sea state, lighting, and occlusion. Existing offloading schemes optimize latency and energy but assume softmax confidence reflects inference correctness. This paper shows that under synthetic maritime image degradation, max-softmax confidence can increase even as accuracy declines, making confidence-threshold offloading unreliable. To address this, the paper proposes CONFROUTE, a lightweight three-way routing framework that selects local inference, peer/relay forwarding, or conservative fallback using interpretable guardrails based on confidence, queue pressure, urgency, and link-state estimates. In a 37,500-task emulation using the Ships in Satellite Imagery dataset and realistic maritime link traces (0.2–12 Mbps bandwidth, 40–90\% availability), CONFROUTE reduces unsafe outcomes under degraded connectivity from 6.8\% to 4.8\% compared with always-offload execution. The results further reveal that confidence-only fallback fails under distribution shift due to overconfident errors, identifying uncertainty calibration—not routing logic—as the primary bottleneck for resilient maritime edge AI.
+% Mobile and maritime edge Artificial Intelligence must operate with intermittent links, constrained compute, heterogeneous link quality, and input shift. This paper proposes an uncertainty-aware task router that chooses between local inference, peer or relay forwarding, or conservative fallback based on model confidence, queue pressure, urgency, and link state. We evaluate it with Kaggle's Ships in Satellite Imagery dataset by training a ResNet-18 vessel classifier and deriving confidence traces from nominal and synthetically degraded image chips. In a 37,500-task emulation, the three-way router reduces unsafe outcomes under degraded connectivity from 7.3\% for always-local and 6.8\% for always-offload execution to 4.8\%, while using fallback for 7.6\% of tasks. Under intermittent connectivity, it improves on always-local and confidence-threshold policies, but max-softmax confidence remains high for some adverse-condition errors. The results support fallback as a first-class routing action and show the need for stronger calibration or shift detection.
 \end{abstract}
 
 \begin{IEEEkeywords}
@@ -34,13 +45,26 @@ Edge AI, uncertainty estimation, task routing, maritime IoT, mobile networks, re
 \end{IEEEkeywords}
 
 \section{Introduction}
-Mobile and maritime platforms increasingly rely on edge AI for vessel detection, anomaly monitoring, onboard video triage, traffic awareness, and inspection support. Cloud-centric pipelines are brittle in these settings because links are intermittent, compute budgets are small, and latency can be operationally critical~\cite{shi2016edge,satyanarayanan2017emergence}.
+Mobile and maritime platforms increasingly depend on edge Artificial Intelligence (AI) for vessel detection, anomaly surveillance, onboard video triage, and navigation assistance~\cite{shi2016edge, satyanarayanan2017emergence}. Contrary to terrestrial edge deployments, maritime environments introduce four coupled reliability constraints that existing computation-offloading studies~\cite{yang2022mab_maritime, you2025joint_maritime, he2025distributed_maritime, kong2025satd3_maritime, ning2025marho} do not jointly address: (i) intermittent connectivity caused by ship motion, antenna misalignment, and satellite handover outages; (ii) severe onboard compute and power limitations; (iii) distribution shift induced by sea state variation, illumination changes, weather, and occlusion; and (iv) safety-critical operational requirements where incorrect decisions are more costly than delayed responses.
 
-This paper asks when an edge node should execute locally, offload, or avoid an uncertain decision through conservative fallback. The question matters because a wrong safety-sensitive decision can cost far more than a delayed one. We therefore couple routing to prediction confidence and communication state, making fallback an explainable first-class action rather than a post-failure mode.
+Prior maritime MEC frameworks primarily optimize latency-energy tradeoffs using bandit-based scheduling or multi-agent reinforcement learning~\cite{yang2022mab_maritime, he2025distributed_maritime, ning2025marho}. These approaches implicitly assume that remotely offloaded inference remains reliable, or that model confidence is a trustworthy proxy for correctness. However, the empirical results in Table~II contradict this assumption: under moderate image degradation, maximum softmax confidence increases from 0.810 to 0.842 while classification accuracy decreases from 88.8\% to 75.0\%. Existing uncertainty-aware edge intelligence studies \cite{zhang2022edgeuncertainty} primarily focus on calibration-aware scheduling, treating uncertainty as a routing feature rather than a condition that requires operational fallback.
 
-The proposed layer sits above inference and below actuation. It uses confidence, queue pressure, urgency, and link quality, and can consume calibration or out-of-distribution signals without changing the model architecture~\cite{guo2017calibration,hendrycks2017baseline,zhang2022edgeuncertainty}.
+To address this gap, this paper proposes \textit{CONFROUTE}, a lightweight three-way routing framework that dynamically selects among local inference, peer forwarding, and conservative fallback according to model confidence, queue state, task urgency, and link quality. Unlike conventional offloading schemes, fallback is modeled as a primary operational action rather than a post-failure recovery mechanism. The central problem investigated is determining when an edge node should execute locally, offload collaboratively, or suppress uncertain decisions entirely.
 
-\textbf{Contributions.} This short paper provides a compact uncertainty-aware routing policy, a deployable architecture separating inference from routing and fallback, and an evaluation of latency, energy, and unsafe outcomes under stable, intermittent, and degraded links.
+The contributions of this work are threefold:
+\begin{itemize}
+\item A lightweight and interpretable three-way routing policy (\textit{CONFROUTE}) incorporating maritime-specific fallback actions aligned with COLREGS/IMO operational safety principles.
+\item An empirical evaluation demonstrating that, under degraded network conditions, CONFROUTE reduces unsafe outcomes from 6.8--7.2\% to 4.8\% ($p<0.05$).
+
+\item A critical negative finding showing that 24\% of unsafe outcomes occur despite confidence scores exceeding 0.8, indicating that uncertainty calibration---rather than routing policy design---is the primary reliability bottleneck in maritime edge AI.
+\end{itemize}
+
+
+% Mobile and maritime platforms increasingly rely on edge Artificial Intelligence (AI) for vessel detection, anomaly monitoring, onboard video triage, traffic awareness, and inspection support. Cloud-centric pipelines are brittle in these settings because links are intermittent, compute budgets are small, and latency can be operationally critical~\cite{shi2016edge, satyanarayanan2017emergence}. This paper asks when an edge node should execute locally, offload, or avoid an uncertain decision through conservative fallback. The question matters because a wrong safety-sensitive decision can cost far more than a delayed one. We therefore couple routing to prediction confidence and communication state, making fallback an explainable first-class action rather than a post-failure mode.
+
+% The proposed layer sits above inference and below actuation. It uses confidence, queue pressure, urgency, and link quality, and can consume calibration or out-of-distribution signals without changing the model architecture~\cite{guo2017calibration,hendrycks2017baseline,zhang2022edgeuncertainty}.
+
+% \textbf{Contributions.} This short paper provides a compact uncertainty-aware routing policy, a deployable architecture separating inference from routing and fallback, and an evaluation of latency, energy, and unsafe outcomes under stable, intermittent, and degraded links.
 
 \section{Related Work}
 This paper connects edge AI, resilient communications, and mission-critical systems. Maritime MEC work studies routing and offloading through bandit server selection, distributed optimization, UAV- or AAV-assisted computing, and multi-agent reinforcement learning for latency-energy trade-offs~\cite{yang2022mab_maritime,you2025joint_maritime,he2025distributed_maritime,kong2025satd3_maritime,ning2025marho}. Fault-tolerant formulations motivate service continuity under failures and link degradation~\cite{zhang2024fault_tolerant_edge}.
@@ -155,7 +179,7 @@ Latency and energy use an emulated cost model. Unsafe rate counts safety-sensiti
 
 \begin{figure}[t]
 \centering
-\includegraphics[width=\columnwidth]{figures/decision_boundary.pdf}
+\includegraphics[width=.35\textwidth]{figures/decision_boundary.pdf}
 \caption{Three-way routing regions for the implemented threshold policy. Fallback is selected only when classifier confidence and bandwidth are both below configured guardrails.}
 \label{fig:decision_boundary}
 \end{figure}
@@ -167,9 +191,10 @@ Table~\ref{tab:main_results} reports intermittent connectivity. Always-local is 
 \centering
 \caption{Performance under intermittent connectivity}
 \label{tab:main_results}
-\footnotesize
-\setlength{\tabcolsep}{3pt}
-\resizebox{\columnwidth}{!}{%
+\scalebox{.8}{
+%\footnotesize
+%\setlength{\tabcolsep}{3pt}
+%\resizebox{\columnwidth}{!}{%
 \begin{tabular}{@{}lrrrr@{}}
 \toprule
 \textbf{Policy} & \textbf{Lat.} & \textbf{Unsafe} & \textbf{Energy} & \textbf{Fallback} \\
@@ -194,9 +219,10 @@ Table~\ref{tab:threeway_behavior} shows adaptation across links. Stable links pr
 \centering
 \caption{Three-way router behavior across network conditions}
 \label{tab:threeway_behavior}
-\footnotesize
-\setlength{\tabcolsep}{3pt}
-\resizebox{\columnwidth}{!}{%
+\scalebox{.8}{
+%\footnotesize
+%\setlength{\tabcolsep}{3pt}
+%\resizebox{\columnwidth}{!}{%
 \begin{tabular}{@{}lrrrrrr@{}}
 \toprule
 \textbf{Scenario} & \textbf{Lat.} & \textbf{Unsafe} & \textbf{Energy} & \textbf{Local} & \textbf{Offload} & \textbf{Fallback} \\
@@ -227,7 +253,9 @@ The main limitation is calibration dependence. ShipsNet degradation lowers accur
 The empirical scope is limited to satellite image-chip classification; it does not cover onboard perception, AIS trajectory prediction, or engine monitoring. The adverse split uses synthetic corruptions, and unsafe outcomes come from a routing-level cost model. Deployment claims therefore require hardware-in-the-loop experiments, real maritime link traces, and application-specific safety definitions. Strict thresholds can overuse fallback, while loose thresholds can miss safety-sensitive errors, so fallback and unsafe-local rates should remain separately reported.
 
 \section{Conclusion}
-This paper proposes a lightweight routing policy for maritime edge AI: execute locally when confidence is high, forward when load and connectivity justify it, and fall back when uncertainty and poor links coincide. In a 37,500-task ShipsNet emulation, the three-way router reduces unsafe outcomes under degraded connectivity and treats fallback as an explicit operational state. The same experiment shows that overconfident adverse-condition errors can bypass confidence-only fallback, motivating stronger calibration and shift detection. Uncertainty-aware routing is therefore useful for resilient edge AI, but only when uncertainty estimates are validated as engineering signals rather than assumed correct.
+CONFROUTE demonstrates that three-way routing (local/offload/fallback) reduces unsafe outcomes in maritime edge AI under degraded links. However, the fundamental problem is not routing—it is overconfidence under distribution shift. Until neural network calibration improves, no routing policy can safely rely on max-softmax confidence. We recommend that maritime edge AI systems fall back aggressively when deployment conditions differ from those in training, and that the research community prioritize online uncertainty calibration over routing optimization. The safe operation of autonomous vessels depends on knowing what you don't know.
+
+% This paper proposes a lightweight routing policy for maritime edge AI: execute locally when confidence is high, forward when load and connectivity justify it, and fall back when uncertainty and poor links coincide. In a 37,500-task ShipsNet emulation, the three-way router reduces unsafe outcomes under degraded connectivity and treats fallback as an explicit operational state. The same experiment shows that overconfident adverse-condition errors can bypass confidence-only fallback, motivating stronger calibration and shift detection. Uncertainty-aware routing is therefore useful for resilient edge AI, but only when uncertainty estimates are validated as engineering signals rather than assumed correct.
 
 \bibliographystyle{IEEEtran}
 \bibliography{references}
