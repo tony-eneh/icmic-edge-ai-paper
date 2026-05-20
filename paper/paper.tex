@@ -90,14 +90,12 @@ where $\ell(r_i)$ is latency, $e(r_i)$ is energy, $\mathbf{1}_{\text{unsafe}}(r_
 \subsection{System Architecture}
 Figure~\ref{fig:arch} sketches the system. Sensor tasks are preprocessed, scored, and routed to local completion, peer forwarding, or fallback. The router logs confidence bucket, link state bucket, selected action, and completion status for audit.
 
-\begin{figure}[t]
+\begin{figure*}[t]
 \centering
-\resizebox{\columnwidth}{!}{%
-\input{figures/architecture.tikz}%
-}
+\includegraphics[width=\textwidth]{figures/architecture_full.png}
 \caption{System architecture: sensor tasks are scored locally, combined with queue and link telemetry, and routed to local execution, peer forwarding, or conservative fallback with audit metadata.}
 \label{fig:arch}
-\end{figure}
+\end{figure*}
 
 Placing the router after scoring but before actuation uses uncertainty without changing the model and keeps fallback logic separate from inference. Forwarding is opportunistic: timeout returns a task for local execution or fallback. Compact logs support threshold tuning and explain non-model handling.
 
