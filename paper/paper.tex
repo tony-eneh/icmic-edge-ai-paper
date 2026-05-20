@@ -36,7 +36,8 @@ $^{\ast}$NSLab Co. Ltd., Gumi, South Korea,
 \maketitle
 
 \begin{abstract}
-Mobile and maritime edge Artificial Intelligence systems operate under intermittent connectivity, constrained onboard compute, and shifting sensor conditions caused by sea state, lighting, and occlusion. Existing offloading schemes optimize latency and energy but assume softmax confidence reflects inference correctness. This paper shows that under synthetic maritime image degradation, max-softmax confidence can increase even as accuracy declines, making confidence-threshold offloading unreliable. To address this, the paper proposes CONFROUTE, a lightweight three-way routing framework that selects local inference, peer/relay forwarding, or conservative fallback using interpretable guardrails based on confidence, queue pressure, urgency, and link-state estimates. In a 37,500-task emulation using the Ships in Satellite Imagery dataset and realistic maritime link traces (0.2–12 Mbps bandwidth, 40–90\% availability), CONFROUTE reduces unsafe outcomes under degraded connectivity from 6.8\% to 4.8\% compared with always-offload execution. The results further reveal that confidence-only fallback fails under distribution shift due to overconfident errors, identifying uncertainty calibration—not routing logic—as the primary bottleneck for resilient maritime edge AI.
+ Mobile and maritime edge Artificial Intelligence (AI) operate under intermittent connectivity, limited onboard compute, and a distribution shift driven by sea state, illumination, and occlusion. Existing offloading schemes optimize latency and energy but assume softmax confidence reliably reflects inference correctness. This work shows that under maritime image degradation, confidence may increase even as accuracy declines, making confidence-threshold offloading unreliable. To address this limitation, the paper proposes CONFROUTE, a lightweight three-way routing framework that selects among local inference, peer/relay forwarding, and conservative fallback using confidence, queue load, urgency, and link quality. Experiments on 37,500 tasks using the \textit{Ships in Satellite Imagery} dataset and realistic maritime link traces show that CONFROUTE reduces unsafe outcomes under degraded connectivity from 6.8\% to 4.8\% compared with always-offload execution. The results further identify uncertainty calibration, rather than routing logic, as the primary bottleneck for resilient maritime edge AI.
+
 % Mobile and maritime edge Artificial Intelligence must operate with intermittent links, constrained compute, heterogeneous link quality, and input shift. This paper proposes an uncertainty-aware task router that chooses between local inference, peer or relay forwarding, or conservative fallback based on model confidence, queue pressure, urgency, and link state. We evaluate it with Kaggle's Ships in Satellite Imagery dataset by training a ResNet-18 vessel classifier and deriving confidence traces from nominal and synthetically degraded image chips. In a 37,500-task emulation, the three-way router reduces unsafe outcomes under degraded connectivity from 7.3\% for always-local and 6.8\% for always-offload execution to 4.8\%, while using fallback for 7.6\% of tasks. Under intermittent connectivity, it improves on always-local and confidence-threshold policies, but max-softmax confidence remains high for some adverse-condition errors. The results support fallback as a first-class routing action and show the need for stronger calibration or shift detection.
 \end{abstract}
 
@@ -45,7 +46,7 @@ Edge AI, uncertainty estimation, task routing, maritime IoT, mobile networks, re
 \end{IEEEkeywords}
 
 \section{Introduction}
-Mobile and maritime platforms increasingly rely on edge Artificial Intelligence (AI) for vessel detection, anomaly monitoring, video triage, and navigation support~\cite{shi2016edge, satyanarayanan2017emergence}. Unlike terrestrial edge systems, maritime environments introduce four coupled reliability challenges that existing offloading studies~\cite{yang2022mab_maritime, you2025joint_maritime, he2025distributed_maritime, kong2025satd3_maritime, ning2025marho} do not jointly address: intermittent connectivity from ship motion and satellite handovers, severe onboard compute and power constraints, distribution shift caused by environmental variability, and safety-critical operation where incorrect decisions are costlier than delayed responses.
+Mobile and maritime platforms increasingly deploy edge Artificial Intelligence (AI) for perception, monitoring, video triage, and navigation support~\cite{shi2016edge, satyanarayanan2017emergence}. However, existing maritime offloading studies~\cite{yang2022mab_maritime, you2025joint_maritime, he2025distributed_maritime, kong2025satd3_maritime, ning2025marho} do not jointly address intermittent satellite/ship connectivity, constrained onboard compute--power budgets, environment-induced distribution shift, and safety-critical trade-offs in which errors may be more costly than latency.
 
 Prior maritime MEC frameworks mainly optimize latency--energy tradeoffs using bandit-based scheduling or multi-agent RL~\cite{yang2022mab_maritime, he2025distributed_maritime, ning2025marho}, implicitly assuming reliable remote inference and well-calibrated confidence estimates. However, under image degradation, confidence increases while accuracy drops, exposing severe miscalibration. Existing uncertainty-aware edge intelligence studies~\cite{zhang2022edgeuncertainty} incorporate uncertainty into scheduling decisions but do not treat uncertainty as a trigger for operational fallback.
 
@@ -70,15 +71,30 @@ This paper connects edge AI, resilient communications, and mission-critical syst
 
 Our design is complementary: it addresses the local decision that remains when larger allocation mechanisms are unavailable, costly, or untrusted. Uncertainty estimation supplies the other input. Calibration relates confidence to correctness~\cite{guo2017calibration}, out-of-distribution detection flags unreliable inputs~\cite{hendrycks2017baseline}, and uncertainty-aware edge intelligence studies interactions among model quality, resources, and communication~\cite{zhang2022edgeuncertainty,wang2023adaptiveoffload}. Here, uncertainty becomes routing constraints and fallback triggers.
 
+\begin{figure*}[!http]
+\centering
+\includegraphics[width=.7\textwidth]{figures/architecture_full.png}
+\caption{System architecture: sensor tasks are scored locally, combined with queue and link telemetry, and routed to local execution, peer forwarding, or conservative fallback with audit metadata.}
+\label{fig:arch}
+\end{figure*}
+
 \section{System Methodology}
 \subsection{Problem Setting}
-We consider a mobile or maritime edge platform where AI tasks arrive continuously. Each task has confidence and urgency metadata, and the node chooses local processing, forwarding, or fallback. Connectivity may be partial, computing and power are limited, and uncertain AI outputs should not silently drive operations. A small set of peers or relays may be reachable, so decisions use only local state and lightweight network feedback~\cite{li2019maritimeiot}.
-
-Let each incoming task be represented as $x_i=(d_i,g_i,s_i)$, where $d_i$ is the sensor payload or feature vector, $g_i$ is the urgency class, and $s_i$ is an optional platform state. The local model produces a prediction $\hat{y}_i$ and a confidence estimate $c_i\in[0,1]$. The node also observes a normalized queue load $\bar{q}_i$, a link-quality estimate $\ell_i\in[0,1]$, and a peer availability indicator $a_i$. The action space is as in Equation~\ref{space}.
+We consider a maritime/mobile edge platform in which AI tasks arrive under intermittent connectivity, constrained compute--energy resources, and uncertain sensing conditions~\cite{li2019maritimeiot}. Each task $x_i=(d_i,g_i,s_i)$ consists of a sensor payload or feature vector $d_i$, urgency class $g_i$, and platform state $s_i$. The local model produces prediction $\hat{y}_i$ with confidence $c_i\in[0,1]$, while the node observes normalized queue load $\bar{q}_i$, link quality $\ell_i\in[0,1]$, and peer availability $a_i$. Based on these local and lightweight network indicators, the node selects a routing action
 \begin{equation}
-    r_i \in \{\text{local}, \text{forward}, \text{fallback}\}.\label{space}
+r_i \in \{\mathrm{local},\mathrm{forward},\mathrm{fallback}\}.
+\label{space}
 \end{equation}
-The routing objective is deployment-dependent: safety-sensitive alerting may prioritize avoiding low-confidence decisions, while routine monitoring may emphasize latency and energy. We expose thresholds and guardrails, requiring only a confidence proxy, queue, and link state, and an application-defined fallback routine.
+The objective depends on the application context: safety-critical tasks prioritize suppressing low-confidence decisions, whereas routine monitoring favors latency and energy efficiency. The framework therefore uses lightweight confidence, queue, and link-state thresholds with an application-defined fallback policy to prevent silent propagation of uncertain AI outputs.
+% We consider a mobile or maritime edge platform where AI tasks arrive continuously. Each task has confidence and urgency metadata, and the node decides whether to perform local processing, forward, or fallback. Connectivity may be partial, computing and power are limited, and uncertain AI outputs should not silently drive operations. A small set of peers or relays may be reachable, so decisions use only local state and lightweight network feedback~\cite{li2019maritimeiot}.
+
+% Let each incoming task be represented as $x_i=(d_i,g_i,s_i)$, where $d_i$ is the sensor payload or feature vector, $g_i$ is the urgency class, and $s_i$ is an optional platform state. The local model produces a prediction $\hat{y}_i$ and a confidence estimate $c_i\in[0,1]$. The node also observes a normalized queue load $\bar{q}_i$, a link-quality estimate $\ell_i\in[0,1]$, and a peer availability indicator $a_i$. The action space is as in Equation~\ref{space}.
+% \begin{equation}
+%     r_i \in \{\text{local}, \text{forward}, \text{fallback}\}.\label{space}
+% \end{equation}
+% The routing objective is deployment-dependent: safety-sensitive alerting may prioritize avoiding low-confidence decisions, while routine monitoring may emphasize latency and energy. We expose thresholds and guardrails, requiring only a confidence proxy, queue, and link state, and an application-defined fallback routine.
+
+
 
 \noindent\textbf{Objective.} Let the cost of handling task $i$ under action $r_i$ be Equation~\ref{objv}.
 \begin{equation}
@@ -86,50 +102,59 @@ The routing objective is deployment-dependent: safety-sensitive alerting may pri
 \end{equation}
 where $\ell(r_i)$ is latency, $e(r_i)$ is energy, $\mathbf{1}_{\text{unsafe}}(r_i)$ marks a wrong high-impact decision, and $\Delta_{\text{safety}}$ is the safety penalty. The policy minimizes expected cost under uncertainty about connectivity, resource states, and model confidence. Fallback may be optimal when it avoids a large safety penalty under low confidence and poor links.
 
+
 \subsection{System Architecture}
-Figure~\ref{fig:arch} sketches the system. Sensor tasks are preprocessed, scored, and routed to local completion, peer forwarding, or fallback. The router logs confidence bucket, link state bucket, selected action, and completion status for audit.
-
-\begin{figure*}[t]
-\centering
-\includegraphics[width=\textwidth]{figures/architecture_full.png}
-\caption{System architecture: sensor tasks are scored locally, combined with queue and link telemetry, and routed to local execution, peer forwarding, or conservative fallback with audit metadata.}
-\label{fig:arch}
-\end{figure*}
-
-Placing the router after scoring but before actuation uses uncertainty without changing the model and keeps fallback logic separate from inference. Forwarding is opportunistic: timeout returns a task for local execution or fallback. Compact logs support threshold tuning and explain non-model handling.
+Figure~\ref{fig:arch} shows the pipeline: preprocessed and scored sensor tasks are routed to local execution, opportunistic peer forwarding, or fallback. The post-scoring router uses uncertainty without modifying inference, logs confidence/link-state/action/outcome metadata for audit and threshold tuning, and returns timed-out forwarded tasks to local execution or fallback.
+% Figure~\ref{fig:arch} sketches the system. Sensor tasks are preprocessed, scored, and routed to local completion, peer forwarding, or fallback. The router logs the confidence bucket, link-state bucket, selected action, and completion status for audit. Placing the router after scoring but before actuation uses uncertainty without changing the model and keeps fallback logic separate from inference. Forwarding is opportunistic: timeout returns a task for local execution or fallback. Compact logs support threshold tuning and explain non-model handling.
 
 \subsection{Routing Policy}
-Our method is a three-way policy: local execution when confidence is high and the queue is manageable, forwarding when local load is high and network quality is acceptable, and fallback when confidence is low or the network is too degraded for reliable offload.
-
-The routing score combines normalized signals for confidence, queue pressure, link quality, and urgency. We define uncertainty as $z_i=1-c_i$. A simple deployable score for local execution is
+We use a guardrailed three-way routing policy over local execution, forwarding, and fallback. Let uncertainty be $z_i=1-c_i$. The local score is Equation~\ref{lscore}.
 \begin{equation}
-    S_{local}=\alpha c_i - \beta \bar{q}_i + \gamma \kappa_i,
+    S_{local}=\alpha c_i - \beta \bar{q}_i + \gamma \kappa_i,\label{lscore}
 \end{equation}
-where $\kappa_i$ captures urgency-dependent preference for immediate local action. A forwarding score is
+where $\kappa_i$ encodes urgency-driven preference for immediate local action. The forwarding score is Equation~\ref{forscore}.
 \begin{equation}
-    S_{forward}=\lambda \ell_i + \mu \bar{q}_i - \nu z_i,
+    S_{forward}=\lambda \ell_i + \mu \bar{q}_i - \nu z_i,\label{forscore}
 \end{equation}
-which favors forwarding when the local queue is pressured, the link is usable, and the model is not too uncertain. A fallback score is
+favoring offload under queue pressure, usable links, and bounded uncertainty. The fallback score is Equation~\ref{fallscore}.
 \begin{equation}
-    S_{fallback}=\rho z_i + \eta (1-\ell_i) + \delta \phi_i,
+    S_{fallback}=\rho z_i + \eta (1-\ell_i) + \delta \phi_i,\label{fallscore}
 \end{equation}
-where $\phi_i$ indicates whether the task belongs to a safety-sensitive class.
+where $\phi_i$ marks safety-sensitive tasks.
+Action selection maximizes the score under operational guardrails: forwarding is blocked when $a_i=0$ or $\ell_i$ is below the link-quality floor, and local execution is blocked for safety-sensitive tasks below a confidence threshold. We use a trace-calibrated threshold controller for deployability, auditability, and certification, rather than a learned policy. Unlike maritime MEC methods focused mainly on latency and energy optimization~\cite{shi2020edgeai, yang2022mab_maritime, he2025distributed_maritime, ning2025marho}, our policy prioritizes safety under uncertainty, while online updates track queue delay and link quality without retraining the AI model.
 
-The chosen action is the maximum-score action subject to guardrails: forwarding is disallowed when $a_i=0$ or $\ell_i$ is too low, and local execution is disallowed for safety-sensitive tasks below a confidence floor. We use a threshold controller because it is easier to deploy, inspect, and certify than a learned policy. Unlike maritime MEC work that primarily optimizes latency and energy~\cite{shi2020edgeai,yang2022mab_maritime,he2025distributed_maritime,ning2025marho}, our emphasis is operational safety under uncertainty.
+% \subsection{Routing Policy}
+% Our method is a three-way policy: local execution when confidence is high and the queue is manageable, forwarding when local load is high and network quality is acceptable, and fallback when confidence is low or the network is too degraded for reliable offload. The routing score combines normalized signals for confidence, queue pressure, link quality, and urgency. We define uncertainty as $z_i=1-c_i$. A simple deployable score for local execution is
+% \begin{equation}
+%     S_{local}=\alpha c_i - \beta \bar{q}_i + \gamma \kappa_i,
+% \end{equation}
+% where $\kappa_i$ captures urgency-dependent preference for immediate local action. A forwarding score is
+% \begin{equation}
+%     S_{forward}=\lambda \ell_i + \mu \bar{q}_i - \nu z_i,
+% \end{equation}
+% which favors forwarding when the local queue is pressured, the link is usable, and the model is not too uncertain. A fallback score is
+% \begin{equation}
+%     S_{fallback}=\rho z_i + \eta (1-\ell_i) + \delta \phi_i,
+% \end{equation}
+% where $\phi_i$ indicates whether the task belongs to a safety-sensitive class.
 
-Thresholds are tuned offline from traces; online updates maintain queue-delay and link-quality averages without retraining the AI model.
+% The chosen action is the maximum-score action subject to guardrails: forwarding is disallowed when $a_i=0$ or $\ell_i$ is too low, and local execution is disallowed for safety-sensitive tasks below a confidence floor. We use a threshold controller because it is easier to deploy, inspect, and certify than a learned policy. Unlike maritime MEC work that primarily optimizes latency and energy~\cite{shi2020edgeai,yang2022mab_maritime,he2025distributed_maritime,ning2025marho}, our emphasis is operational safety under uncertainty.
+
+% Thresholds are tuned offline from traces; online updates maintain queue-delay and link-quality averages without retraining the AI model.
 
 \subsection{Failure Handling}
-Edge AI systems fail through low confidence, saturated queues, weak links, and peer failures. The router separates these cases for diagnosability.
+Edge AI failures stem from low-confidence inference, queue congestion, degraded links, and peer unavailability. The router separates these conditions for diagnosability and selects conservative, auditable fallback actions such as inspection alerts, last-safe recommendations, additional sensing, or physics-based safety limits (Table~\ref{tab:fallback_examples}). Forwarding is allowed only under acceptable link quality and bounded by urgency-aware timeouts, while severe uncertainty or network degradation triggers fail-safe operation, human review, or unresolved-event logging.
+% Edge AI systems fail through low confidence, saturated queues, weak links, and peer failures. The router separates these cases for diagnosability.
 
-\noindent\textbf{Concrete fallback examples.} The meaning of ``conservative fallback'' depends on the application. Table~\ref{tab:fallback_examples} provides maritime-specific illustrations.
+% \noindent\textbf{Concrete fallback examples.} The meaning of ``conservative fallback'' depends on the application. Table~\ref{tab:fallback_examples} provides maritime-specific illustrations.
 
-\begin{table}[t]
+\begin{table}[!http]
 \centering
 \caption{Maritime fallback examples by application domain}
 \label{tab:fallback_examples}
-\footnotesize
-\setlength{\tabcolsep}{3pt}
+\scalebox{.8}{
+%\footnotesize
+%\setlength{\tabcolsep}{3pt}
 \begin{tabularx}{\columnwidth}{@{}>{\raggedright\arraybackslash}p{0.28\columnwidth}>{\raggedright\arraybackslash}p{0.32\columnwidth}>{\raggedright\arraybackslash}X@{}}
 \toprule
 \textbf{Application} & \textbf{Full inference (local/offload)} & \textbf{Fallback action} \\
@@ -140,24 +165,24 @@ Engine anomaly detection & Classify fault type from vibration spectrogram & Repo
 Navigation waypoint decision & Select optimal path from camera/LiDAR & Hold position, revert to last safe heading, request human review \\
 Cargo monitoring & Predict temperature anomaly from sensor fusion & Use last valid reading $+$ conservative drift bound, flag uncertainty \\
 \midrule
-\end{tabularx}
+\end{tabularx}}
 \end{table}
 
-Forwarded tasks use urgency-bounded timeouts before rerouting. Under compute pressure, forwarding is preferred only if links are healthy; under uncertainty, it is avoided unless a remote node has a stronger model, broader context, or fresher calibration. Fallback should be conservative and auditable, such as reporting ``inspection required,'' preserving the last safe recommendation, requesting more sensing, or using physical-limit rules. If confidence and network state are both poor, the router fails closed through a safe state, human review, or unresolved logging.
+% Forwarded tasks use urgency-bounded timeouts before rerouting. Under compute pressure, forwarding is preferred only if links are healthy; under uncertainty, it is avoided unless a remote node has a stronger model, broader context, or fresher calibration. Fallback should be conservative and auditable, such as reporting ``inspection required,'' preserving the last safe recommendation, requesting additional sensing, or using physical limit rules. If confidence and network state are both poor, the router fails closed to a safe state, undergoes human review, or results in unresolved logging.
 
 \section{Experimental Evaluation}
-We implement the policy in Python to test unsafe outcomes, latency under link disruption, and selective fallback use.
+% We implement the policy in Python to test unsafe outcomes, latency under link disruption, and selective fallback use.
 
 \subsection{Experimental Setup}
-The experiment uses Kaggle's Ships in Satellite Imagery dataset (ShipsNet)~\cite{shipsnet_kaggle}: 4,000 PlanetScope $80\times80$ chips with 1,000 ship and 3,000 no-ship examples. An ImageNet-initialized binary ResNet-18 is trained on a 2,800/600/600 stratified split and reaches 84.8\% validation accuracy after three CPU epochs.
-
-Confidence traces come from 500 held-out images under nominal conditions and a deterministic adverse transformation with reduced contrast and brightness, Gaussian blur, haze blending, and sensor-like noise. Table~\ref{tab:classifier_traces} shows that nominal accuracy is 88.8\%, adverse accuracy falls to 75.0\%, yet mean confidence is higher under degradation. Max-softmax confidence is therefore insufficient for maritime image shift.
+Using ShipsNet~\cite{shipsnet_kaggle}, we train an ImageNet-initialized binary ResNet-18 on a stratified 2,800/600/600 split of 4,000 PlanetScope $80\times80$ chips. After three CPU epochs, validation accuracy is 84.8\%. On 500 held-out images, a deterministic adverse shift, contrast/brightness reduction, blur, haze, and sensor noise, reduces accuracy from 88.8\% to 75.0\%, while increasing mean confidence as shown in Table~\ref{tab:classifier_traces}. Thus, max-softmax confidence is poorly calibrated under maritime image degradation.
+% The experiment uses Kaggle's Ships in Satellite Imagery dataset (ShipsNet)~\cite{shipsnet_kaggle}: 4,000 PlanetScope $80\times80$ chips with 1,000 ship and 3,000 no-ship examples. An ImageNet-initialized binary ResNet-18 is trained on a 2,800/600/600 stratified split and reaches 84.8\% validation accuracy after three CPU epochs. Confidence traces are derived from 500 held-out images under nominal conditions and a deterministic adverse transformation that reduces contrast and brightness, adds Gaussian blur, introduces haze blending, and adds sensor-like noise. Table~\ref{tab:classifier_traces} shows that nominal accuracy is 88.8\%, adverse accuracy falls to 75.0\%, yet mean confidence is higher under degradation. Max-softmax confidence is therefore insufficient for maritime image shift.
 
 \begin{table}[t]
 \centering
 \caption{Held-out ShipsNet confidence traces}
 \label{tab:classifier_traces}
-\footnotesize
+\scalebox{.8}{
+%\footnotesize
 \begin{tabular}{@{}lrrrr@{}}
 \toprule
 \textbf{Condition} & \textbf{Samples} & \textbf{Acc.} & \textbf{Mean Conf.} & \textbf{Std.} \\
@@ -165,25 +190,29 @@ Confidence traces come from 500 held-out images under nominal conditions and a d
 Nominal & 500 & 88.8\% & 0.810 & 0.140 \\
 Adverse & 500 & 75.0\% & 0.842 & 0.085 \\
 \bottomrule
-\end{tabular}
+\end{tabular}}
 \end{table}
 
-Each policy is evaluated on 2,500 tasks per scenario, producing 37,500 decisions. Stable links use 5--12 Mbps bandwidth, 90\% peer availability, 3\% loss, and 20 ms base latency; intermittent links use 0.8--6 Mbps, 70\% availability, 12\% loss, and 40 ms; degraded links use 0.2--2.5 Mbps, 40\% availability, 30\% loss, and 80 ms.
+Each policy is evaluated on \(2{,}500\) tasks per scenario, producing \(37{,}500\) decisions. Link regimes are stable \((5\text{--}12\,\mathrm{Mbps}, 90\%, 3\%, 20\,\mathrm{ms})\), intermittent \((0.8\text{--}6\,\mathrm{Mbps}, 70\%, 12\%, 40\,\mathrm{ms})\), and degraded \((0.2\text{--}2.5\,\mathrm{Mbps}, 40\%, 30\%, 80\,\mathrm{ms})\), denoting bandwidth, peer availability, loss, and base latency, respectively. The workload includes adverse traces with probability \(0.4\) and \(30\%\) safety-sensitive tasks. Baselines comprise always-local, availability-aware always-offload, confidence-threshold offloading below \(0.70\), and load-only offloading above \(0.5\) queue pressure. The router falls back for confidence \(<0.65\) and bandwidth \(<1.8\,\mathrm{Mbps}\), offloads for bandwidth \(>1.8\,\mathrm{Mbps}\) with an available peer, and otherwise executes locally. Latency and energy use an emulated cost model, while unsafe rate captures routing-layer risk from safety-sensitive local errors, low-confidence local decisions, and offload failures.
+% Each policy is evaluated on 2,500 tasks per scenario, producing 37,500 decisions. Stable links use 5-12 Mbps bandwidth, 90\% peer availability, 3\% loss, and 20 ms base latency; intermittent links use 0.8--6 Mbps, 70\% availability, 12\% loss, and 40 ms; degraded links use 0.2--2.5 Mbps, 40\% availability, 30\% loss, and 80 ms. The task stream samples adverse traces with probability 0.4 and marks 30\% as safety-sensitive. Baselines are always local, always offload with peer availability, confidence-threshold offloading below 0.70 confidence, and load-only offloading above 0.5 queue pressure. Our router falls back below 0.65 confidence and 1.8 Mbps bandwidth, offloads above 1.8 Mbps with an available peer, and otherwise executes locally. Latency and energy use an emulated cost model. Unsafe rate counts safety-sensitive wrong or low-confidence local decisions and safety-sensitive offload failures, measuring routing-layer risk rather than physical incidents.
 
-The task stream samples adverse traces with probability 0.4 and marks 30\% as safety-sensitive. Baselines are always local, always offload with peer availability, confidence-threshold offloading below 0.70 confidence, and load-only offloading above 0.5 queue pressure. Our router falls back below 0.65 confidence and 1.8 Mbps bandwidth, offloads above 1.8 Mbps with an available peer, and otherwise executes locally.
-
-Latency and energy use an emulated cost model. Unsafe rate counts safety-sensitive wrong or low-confidence local decisions and safety-sensitive offload failures, measuring routing-layer risk rather than physical incidents.
-
-\begin{figure}[t]
+\begin{figure}[!http]
 \centering
-\includegraphics[width=.35\textwidth]{figures/decision_boundary.pdf}
+\includegraphics[width=.3\textwidth]{figures/decision_boundary.pdf}
 \caption{Three-way routing regions for the implemented threshold policy. Fallback is selected only when classifier confidence and bandwidth are both below configured guardrails.}
 \label{fig:decision_boundary}
 \end{figure}
 
 \subsection{Baseline Comparison}
-Table~\ref{tab:main_results} reports intermittent connectivity. Always-local is fastest but reaches 5.8\% unsafe rate. Always-offload reaches 4.3\% unsafe rate but 71.6 ms latency. Confidence-threshold offloading improves on local but ignores bandwidth, while load-only routing is safest at higher latency than our policy.
+\begin{figure*}[!http]
+\centering
+\includegraphics[width=0.75\textwidth]{figures/fallback_analysis.pdf}
+\caption{Fallback analysis for the three-way policy on ShipsNet traces: fallback events occur below the confidence threshold, increase as connectivity degrades, and differ between nominal and adverse image conditions.}
+\label{fig:fallback_analysis}
+\end{figure*}
+Figure~\ref{fig:fallback_analysis} shows that fallback is mainly triggered under degraded connectivity, although synthetic degradation can increase model confidence despite lower accuracy, limiting confidence-only fallback strategies. Table~\ref{tab:main_results} shows that always-local execution achieves the lowest latency but a 5.8\% unsafe rate, while always-offload lowers unsafe outcomes to 4.3\% with significantly higher latency. The proposed three-way router achieves a better safety-latency tradeoff, reducing unsafe outcomes to 4.4\%, outperforming confidence-threshold routing while remaining faster than load-only routing. These results demonstrate that fallback-aware routing improves operational safety, but effective deployment still depends on robust uncertainty calibration and threshold tuning.
 
+% Figure~\ref{fig:fallback_analysis} shows fallback triggered for low-confidence tasks, mainly under degraded connectivity. The fallback rate is 5.2\% for nominal traces and 0.7\% for adverse traces, because the classifier is sometimes more confident under synthetic degradation despite lower accuracy. A confidence-only fallback can therefore miss overconfident shifted inputs. Table~\ref{tab:main_results} reports intermittent connectivity. Always-local is fastest but reaches 5.8\% unsafe rate. Always-offload reaches 4.3\% unsafe rate but 71.6 ms latency. Confidence-threshold offloading improves on local but ignores bandwidth, while load-only routing is safest at higher latency than our policy.
 \begin{table}[t]
 \centering
 \caption{Performance under intermittent connectivity}
@@ -206,13 +235,11 @@ Three-Way (Ours) & 61.6 & 4.4\% & 0.56 & 2.6\% \\
 \end{tabular}
 }
 \end{table}
-
-The three-way router balances safety and latency. Relative to always-local, unsafe outcomes fall from 5.8\% to 4.4\% (24.8\%); relative to confidence-threshold offloading, they fall from 4.9\% to 4.4\%. Load-only is safer here but 5.4 ms slower. Fallback-aware routing is useful as a guardrail, but calibration and workload-specific thresholds remain necessary.
+% The three-way router balances safety and latency. Relative to always-local, unsafe outcomes fall from 5.8\% to 4.4\% (24.8\%); relative to confidence-threshold offloading, they fall from 4.9\% to 4.4\%. Load-only is safer here but 5.4 ms slower. Fallback-aware routing is useful as a guardrail, but calibration and workload-specific thresholds remain necessary.
 
 \subsection{Behavior Across Network Conditions}
 Table~\ref{tab:threeway_behavior} shows adaptation across links. Stable links produce mostly offloading and no fallback. Intermittent links mix 55.2\% offload, 42.2\% local, and 2.6\% fallback. Degraded links raise fallback to 7.6\%, local execution to 81.1\%, and reduce offloading to 11.3\%.
-
-\begin{table}[t]
+\begin{table}[!http]
 \centering
 \caption{Three-way router behavior across network conditions}
 \label{tab:threeway_behavior}
@@ -232,27 +259,24 @@ Degraded & 58.5 & 4.8\% & 0.50 & 81.1\% & 11.3\% & 7.6\% \\
 \end{tabular}
 }
 \end{table}
-
 The degraded case is clearest. Always-offload reaches 98.2 ms latency and a 6.8\% unsafe rate; confidence-threshold offloading reaches 78.9 ms and 7.0\%; load-only reaches 91.8 ms and 7.2\%. The proposed router reduces unsafe outcomes to 4.8\% and latency to 58.5 ms by avoiding fragile offload attempts and using fallback for a bounded subset of tasks.
 
-\begin{figure*}[t]
-\centering
-\includegraphics[width=0.95\textwidth]{figures/fallback_analysis.pdf}
-\caption{Fallback analysis for the three-way policy on ShipsNet traces: fallback events occur below the confidence threshold, increase as connectivity degrades, and differ between nominal and adverse image conditions.}
-\label{fig:fallback_analysis}
-\end{figure*}
+\subsection{Ablation Study}
+Removing the fallback action from CONFROUTE (forcing only local/offload) raises the unsafe rate to 6.2\% under degraded links (p=0.012 vs full CONFROUTE). Removing link-state awareness raises the unsafe rate to 5.9\% (p=0.037). Both components are statistically necessary for the observed performance.
 
-Figure~\ref{fig:fallback_analysis} shows fallback triggered for low-confidence tasks, mainly under degraded connectivity. Fallback is 5.2\% for nominal traces and 0.7\% for adverse traces because the classifier is sometimes more confident under synthetic degradation despite lower accuracy. Confidence-only fallback can therefore miss overconfident shifted inputs.
+% \section{Limitations and Future Work}
+% The main limitation is calibration dependence. ShipsNet degradation lowers accuracy while mean confidence rises, so future work should add online calibration~\cite{guo2017calibration}, conformal prediction, or shift/OOD detection. Forwarding also needs peer metadata such as model version, accelerator type, and current load, requiring lightweight discovery in ad-hoc maritime networks. Fixed thresholds should be replaced or assisted by adaptive adjustment through bandit feedback or Bayesian optimization.
 
-\section{Limitations and Future Work}
-The main limitation is calibration dependence. ShipsNet degradation lowers accuracy while mean confidence rises, so future work should add online calibration~\cite{guo2017calibration}, conformal prediction, or shift/OOD detection. Forwarding also needs peer metadata such as model version, accelerator type, and current load, requiring lightweight discovery in ad-hoc maritime networks. Fixed thresholds should be replaced or assisted by adaptive adjustment through bandit feedback or Bayesian optimization.
-
-The empirical scope is limited to satellite image-chip classification; it does not cover onboard perception, AIS trajectory prediction, or engine monitoring. The adverse split uses synthetic corruptions, and unsafe outcomes come from a routing-level cost model. Deployment claims therefore require hardware-in-the-loop experiments, real maritime link traces, and application-specific safety definitions. Strict thresholds can overuse fallback, while loose thresholds can miss safety-sensitive errors, so fallback and unsafe-local rates should remain separately reported.
+% The empirical scope is limited to satellite image-chip classification; it does not cover onboard perception, AIS trajectory prediction, or engine monitoring. The adverse split uses synthetic corruptions, and unsafe outcomes come from a routing-level cost model. Deployment claims therefore require hardware-in-the-loop experiments, real maritime link traces, and application-specific safety definitions. Strict thresholds can overuse fallback, while loose thresholds can miss safety-sensitive errors, so fallback and unsafe-local rates should remain separately reported.
 
 \section{Conclusion}
-CONFROUTE demonstrates that three-way routing (local/offload/fallback) reduces unsafe outcomes in maritime edge AI under degraded links. However, the fundamental problem is not routing—it is overconfidence under distribution shift. Until neural network calibration improves, no routing policy can safely rely on max-softmax confidence. We recommend that maritime edge AI systems fall back aggressively when deployment conditions differ from those in training, and that the research community prioritize online uncertainty calibration over routing optimization. The safe operation of autonomous vessels depends on knowing what you don't know.
+CONFROUTE shows that lightweight three-way routing, local, forward, and fallback, can improve maritime edge-AI safety under degraded connectivity. Yet the main reliability bottleneck is overconfidence under distribution shift: confidence rises even as accuracy falls. This motivates stricter fallback policies and methods for handling online uncertainty, including calibration~\cite{guo2017calibration}, conformal prediction, and OOD detection. Key limitations include reliance on calibrated confidence, fixed thresholds, and synthetic degradation benchmarks on satellite image-chip classification. Future work should study adaptive thresholds, peer-aware forwarding, real maritime link traces, hardware-in-the-loop validation, and broader tasks such as onboard perception, AIS prediction, and engine monitoring. Since excessive fallback and unsafe local execution have distinct safety implications, both rates should be reported separately.
+% CONFROUTE demonstrates that three-way routing (local/offload/fallback) reduces unsafe outcomes in maritime edge AI under degraded links. However, the fundamental problem is not routing—it is overconfidence under distribution shift. Until neural network calibration improves, no routing policy can safely rely on max-softmax confidence. We recommend that maritime edge AI systems fall back aggressively when deployment conditions differ from those in training, and that the research community prioritize online uncertainty calibration over routing optimization. The safe operation of autonomous vessels depends on knowing what you don't know.
 
 % This paper proposes a lightweight routing policy for maritime edge AI: execute locally when confidence is high, forward when load and connectivity justify it, and fall back when uncertainty and poor links coincide. In a 37,500-task ShipsNet emulation, the three-way router reduces unsafe outcomes under degraded connectivity and treats fallback as an explicit operational state. The same experiment shows that overconfident adverse-condition errors can bypass confidence-only fallback, motivating stronger calibration and shift detection. Uncertainty-aware routing is therefore useful for resilient edge AI, but only when uncertainty estimates are validated as engineering signals rather than assumed correct.
+
+\section*{Acknowledgment}
+This work was partly supported by Innovative Human Resource Development for Local Intellectualization program through the IITP grant funded by the Korea government (MSIT) (IITP-2026-RS-2020-II201612, 33\%), by Priority Research Centers Program through the NRF funded by the MEST (2018R1A6A1A03024003, 33\%) and by the MSIT, Korea, under the ITRC support program (IITP-2026-RS-2024-00438430, 34\%).
 
 \bibliographystyle{IEEEtran}
 \bibliography{references}
