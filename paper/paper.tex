@@ -45,18 +45,17 @@ Edge AI, uncertainty estimation, task routing, maritime IoT, mobile networks, re
 \end{IEEEkeywords}
 
 \section{Introduction}
-Mobile and maritime platforms increasingly depend on edge Artificial Intelligence (AI) for vessel detection, anomaly surveillance, onboard video triage, and navigation assistance~\cite{shi2016edge, satyanarayanan2017emergence}. Contrary to terrestrial edge deployments, maritime environments introduce four coupled reliability constraints that existing computation-offloading studies~\cite{yang2022mab_maritime, you2025joint_maritime, he2025distributed_maritime, kong2025satd3_maritime, ning2025marho} do not jointly address: (i) intermittent connectivity caused by ship motion, antenna misalignment, and satellite handover outages; (ii) severe onboard compute and power limitations; (iii) distribution shift induced by sea state variation, illumination changes, weather, and occlusion; and (iv) safety-critical operational requirements where incorrect decisions are more costly than delayed responses.
+Mobile and maritime platforms increasingly rely on edge Artificial Intelligence (AI) for vessel detection, anomaly monitoring, video triage, and navigation support~\cite{shi2016edge, satyanarayanan2017emergence}. Unlike terrestrial edge systems, maritime environments introduce four coupled reliability challenges that existing offloading studies~\cite{yang2022mab_maritime, you2025joint_maritime, he2025distributed_maritime, kong2025satd3_maritime, ning2025marho} do not jointly address: intermittent connectivity from ship motion and satellite handovers, severe onboard compute and power constraints, distribution shift caused by environmental variability, and safety-critical operation where incorrect decisions are costlier than delayed responses.
 
-Prior maritime MEC frameworks primarily optimize latency-energy tradeoffs using bandit-based scheduling or multi-agent reinforcement learning~\cite{yang2022mab_maritime, he2025distributed_maritime, ning2025marho}. These approaches implicitly assume that remotely offloaded inference remains reliable, or that model confidence is a trustworthy proxy for correctness. However, the empirical results in Table~II contradict this assumption: under moderate image degradation, maximum softmax confidence increases from 0.810 to 0.842 while classification accuracy decreases from 88.8\% to 75.0\%. Existing uncertainty-aware edge intelligence studies \cite{zhang2022edgeuncertainty} primarily focus on calibration-aware scheduling, treating uncertainty as a routing feature rather than a condition that requires operational fallback.
+Prior maritime MEC frameworks mainly optimize latency--energy tradeoffs using bandit-based scheduling or multi-agent RL~\cite{yang2022mab_maritime, he2025distributed_maritime, ning2025marho}, implicitly assuming reliable remote inference and well-calibrated confidence estimates. However, under image degradation, confidence increases while accuracy drops, exposing severe miscalibration. Existing uncertainty-aware edge intelligence studies~\cite{zhang2022edgeuncertainty} incorporate uncertainty into scheduling decisions but do not treat uncertainty as a trigger for operational fallback.
 
-To address this gap, this paper proposes \textit{CONFROUTE}, a lightweight three-way routing framework that dynamically selects among local inference, peer forwarding, and conservative fallback according to model confidence, queue state, task urgency, and link quality. Unlike conventional offloading schemes, fallback is modeled as a primary operational action rather than a post-failure recovery mechanism. The central problem investigated is determining when an edge node should execute locally, offload collaboratively, or suppress uncertain decisions entirely.
+To address these limitations, this paper introduces CONFROUTE, a lightweight three-way routing framework that adaptively selects local inference, peer offloading, or conservative fallback based on model confidence, queue pressure, task urgency, and link conditions. Unlike conventional offloading methods, fallback is treated as a primary operational decision rather than a post-failure recovery mechanism, enabling edge nodes to avoid unsafe actions under high uncertainty.
 
 The contributions of this work are threefold:
 \begin{itemize}
-\item A lightweight and interpretable three-way routing policy (\textit{CONFROUTE}) incorporating maritime-specific fallback actions aligned with COLREGS/IMO operational safety principles.
-\item An empirical evaluation demonstrating that, under degraded network conditions, CONFROUTE reduces unsafe outcomes from 6.8--7.2\% to 4.8\% ($p<0.05$).
-
-\item A critical negative finding showing that 24\% of unsafe outcomes occur despite confidence scores exceeding 0.8, indicating that uncertainty calibration---rather than routing policy design---is the primary reliability bottleneck in maritime edge AI.
+\item A lightweight and interpretable three-way routing policy (CONFROUTE) incorporating maritime-specific fallback actions aligned with COLREGS/IMO operational safety principles.
+\item An empirical evaluation demonstrating that, under degraded network conditions, CONFROUTE reduces unsafe outcomes.
+\item A critical negative finding showing that unsafe outcomes occur despite high confidence scores, indicating that uncertainty calibration, rather than routing policy design, is the primary reliability bottleneck in maritime edge AI.
 \end{itemize}
 
 
@@ -73,19 +72,19 @@ Our design is complementary: it addresses the local decision that remains when l
 
 \section{System Methodology}
 \subsection{Problem Setting}
-We consider a mobile or maritime edge platform where AI tasks arrive continuously. Each task has confidence and urgency metadata, and the node chooses local processing, forwarding, or fallback. Connectivity may be partial, compute and power are limited, and uncertain AI outputs should not silently drive operations. A small set of peers or relays may be reachable, so decisions use only local state and lightweight network feedback~\cite{li2019maritimeiot}.
+We consider a mobile or maritime edge platform where AI tasks arrive continuously. Each task has confidence and urgency metadata, and the node chooses local processing, forwarding, or fallback. Connectivity may be partial, computing and power are limited, and uncertain AI outputs should not silently drive operations. A small set of peers or relays may be reachable, so decisions use only local state and lightweight network feedback~\cite{li2019maritimeiot}.
 
-Let each incoming task be represented as $x_i=(d_i,g_i,s_i)$, where $d_i$ is the sensor payload or feature vector, $g_i$ is the urgency class, and $s_i$ is optional platform state. The local model produces a prediction $\hat{y}_i$ and a confidence estimate $c_i\in[0,1]$. The node also observes a normalized queue load $\bar{q}_i$, a link-quality estimate $\ell_i\in[0,1]$, and a peer availability indicator $a_i$. The action space is
+Let each incoming task be represented as $x_i=(d_i,g_i,s_i)$, where $d_i$ is the sensor payload or feature vector, $g_i$ is the urgency class, and $s_i$ is an optional platform state. The local model produces a prediction $\hat{y}_i$ and a confidence estimate $c_i\in[0,1]$. The node also observes a normalized queue load $\bar{q}_i$, a link-quality estimate $\ell_i\in[0,1]$, and a peer availability indicator $a_i$. The action space is as in Equation~\ref{space}.
 \begin{equation}
-    r_i \in \{\text{local}, \text{forward}, \text{fallback}\}.
+    r_i \in \{\text{local}, \text{forward}, \text{fallback}\}.\label{space}
 \end{equation}
-The routing objective is deployment-dependent: safety-sensitive alerting may prioritize avoiding low-confidence decisions, while routine monitoring may emphasize latency and energy. We expose thresholds and guardrails, requiring only a confidence proxy, queue and link state, and an application-defined fallback routine.
+The routing objective is deployment-dependent: safety-sensitive alerting may prioritize avoiding low-confidence decisions, while routine monitoring may emphasize latency and energy. We expose thresholds and guardrails, requiring only a confidence proxy, queue, and link state, and an application-defined fallback routine.
 
-\noindent\textbf{Objective.} Let the cost of handling task $i$ under action $r_i$ be:
+\noindent\textbf{Objective.} Let the cost of handling task $i$ under action $r_i$ be Equation~\ref{objv}.
 \begin{equation}
-    C(r_i) = w_1 \cdot \ell(r_i) + w_2 \cdot e(r_i) + w_3 \cdot \mathbf{1}_{\text{unsafe}}(r_i) \cdot \Delta_{\text{safety}}
+    C(r_i) = w_1 \cdot \ell(r_i) + w_2 \cdot e(r_i) + w_3 \cdot \mathbf{1}_{\text{unsafe}}(r_i) \cdot \Delta_{\text{safety}}\label{objv}
 \end{equation}
-where $\ell(r_i)$ is latency, $e(r_i)$ is energy, $\mathbf{1}_{\text{unsafe}}(r_i)$ marks a wrong high-impact decision, and $\Delta_{\text{safety}}$ is the safety penalty. The policy minimizes expected cost under uncertain connectivity, resource state, and model confidence. Fallback may be optimal when it avoids a large safety penalty under low confidence and poor links.
+where $\ell(r_i)$ is latency, $e(r_i)$ is energy, $\mathbf{1}_{\text{unsafe}}(r_i)$ marks a wrong high-impact decision, and $\Delta_{\text{safety}}$ is the safety penalty. The policy minimizes expected cost under uncertainty about connectivity, resource states, and model confidence. Fallback may be optimal when it avoids a large safety penalty under low confidence and poor links.
 
 \subsection{System Architecture}
 Figure~\ref{fig:arch} sketches the system. Sensor tasks are preprocessed, scored, and routed to local completion, peer forwarding, or fallback. The router logs confidence bucket, link state bucket, selected action, and completion status for audit.
