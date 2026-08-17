@@ -8,6 +8,13 @@
 *.out
 *.pdf
 !/paper/figures/*.pdf
+# generated talk figures: the CSVs they derive from are ignored, so keep these
+!/slides/figures/*.pdf
+# the built deck is the deliverable
+!/slides/Anthony_Uchenna_Eneh.pdf
+
+# image candidates are regenerable with fetch_images.py --search
+/slides/images/_candidates/
 *.synctex.gz
 *.toc
 *.nav
