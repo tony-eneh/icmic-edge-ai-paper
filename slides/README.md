@@ -10,10 +10,14 @@ Taipei, 19–21 August 2026.
 
 | File | Purpose |
 |------|---------|
-| `CONFROUTE_ICMIC2026.pptx` | **The deck to present.** 31 slides, 16:9, speaker notes embedded (Presenter View). |
+| `CONFROUTE_ICMIC2026.pptx` | **The full deck.** 31 slides, 16:9, speaker notes embedded (Presenter View). |
 | `Anthony_Uchenna_Eneh.pdf` | PDF export of the same deck, named per ICMIC guidance. Bring both on the USB stick. |
 | `speaker-notes.md` | Timing plan to 14:35, per-slide notes, prepared answers for likely questions. |
-| `build_pptx.py` | Builds the PPTX. Re-run after changing figures or copy. |
+| `CONFROUTE_ICMIC2026_short.pptx` | **The 20-slide version.** Same argument, same figures, fewer slides. |
+| `Anthony_Uchenna_Eneh_short.pdf` | PDF export of the 20-slide version. |
+| `speaker-notes-short.md` | Timing plan to 13:10 for the 20-slide version. |
+| `build_pptx.py` | Builds the full PPTX. Re-run after changing figures or copy. |
+| `build_pptx_short.py` | Builds the 20-slide PPTX. Self-contained, so the full deck is unaffected. |
 | `make_figures.py` | Regenerates every chart into `figures/` as both PDF and 200 dpi PNG. |
 | `fetch_images.py` | Downloads openly-licensed photographs from Wikimedia Commons, writes credits. |
 | `image_choice.py` | Which downloaded candidate fills which slot. |
@@ -21,6 +25,8 @@ Taipei, 19–21 August 2026.
 | `slides.tex` / `slides.pdf` | Earlier LaTeX Beamer version: 23 dense slides, no photographs. Kept as an alternative. |
 
 ## Structure
+
+### Full deck, 31 slides
 
 One idea per slide. 27 presentation slides plus 4 backup.
 
@@ -36,12 +42,38 @@ One idea per slide. 27 presentation slides plus 4 backup.
 The talk leads with the measurement rather than the method, and closes by arguing
 that calibration, not routing, is the binding constraint.
 
+### Short deck, 20 slides
+
+Same argument, same figures, same palette, nothing new written. All 20 are
+presentation slides; there are no backup slides, so keep the full deck open in a
+second window for Q&A.
+
+- **1–4** the environment, the stakes, the question, the assumption
+- **5–7** the measurement: chips, then the population, then the consequence
+- **8–11** the method: architecture, three actions, what fallback means, when it fires
+- **12–16** setup and results, including where CONFROUTE loses
+- **17–20** the argument, the limitations, the takeaways, close
+
+What was merged to get from 31 to 20:
+
+| Full deck | Short deck |
+|-----------|------------|
+| 2–5, four scene-setting photographs | 2–3, two |
+| 6–7, the question and the assumption | 4, one statement slide |
+| 8–9, nominal chips then adverse chips | 5, `fig_chips` already carries both rows |
+| 12, "a gate fails exactly when you need it" | title of slide 7 |
+| 13, CONFROUTE section break | folded into slide 8 |
+| 22–23, action mix and ablation | 16, side by side |
+| 31, image credits | credits band on slide 20 |
+| 28–30, backup | dropped, use the full deck |
+
 ## Rebuilding
 
 ```sh
 # from the repository root, with the project venv active
 python slides/make_figures.py     # charts, from the experiment CSVs
-python slides/build_pptx.py       # the deck
+python slides/build_pptx.py       # the full deck
+python slides/build_pptx_short.py # the 20-slide deck
 ```
 
 To re-pick photographs:
