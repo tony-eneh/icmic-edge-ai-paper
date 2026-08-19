@@ -1,0 +1,57 @@
+[
+  {
+    "theme": "ship_sea",
+    "title": "File:Aerial photograph of a cargo ship.jpg",
+    "licence": "CC BY-SA 3.0",
+    "category": "Category:Container ships",
+    "artist": "Wilfredor",
+    "descurl": "https://commons.wikimedia.org/wiki/File:Aerial_photograph_of_a_cargo_ship.jpg",
+    "url": "https://upload.wikimedia.org/wikipedia/commons/thumb/5/56/Aerial_photograph_of_a_cargo_ship.jpg/1920px-Aerial_photograph_of_a_cargo_ship.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=thumbnail",
+    "file": "ship_sea_5.jpg",
+    "slot": "hero"
+  },
+  {
+    "theme": "ship_fog",
+    "title": "File:8913473 Framfjord 1990.jpg",
+    "licence": "CC BY-SA 4.0",
+    "category": "Category:Ships in fog",
+    "artist": "Cavernia",
+    "descurl": "https://commons.wikimedia.org/wiki/File:8913473_Framfjord_1990.jpg",
+    "url": "https://upload.wikimedia.org/wikipedia/commons/0/0b/8913473_Framfjord_1990.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=thumbnail_unscaled",
+    "file": "ship_fog_4.jpg",
+    "slot": "fog"
+  },
+  {
+    "theme": "ship_storm",
+    "title": "File:Close up shot of Pasha Bulker b.jpg",
+    "licence": "CC BY-SA 3.0",
+    "category": "Category:Ships in heavy seas",
+    "artist": "File:Close up shot of Pasha Bulker.jpg: Web107\nderivative work: Georgfotoart",
+    "descurl": "https://commons.wikimedia.org/wiki/File:Close_up_shot_of_Pasha_Bulker_b.jpg",
+    "url": "https://upload.wikimedia.org/wikipedia/commons/thumb/e/e1/Close_up_shot_of_Pasha_Bulker_b.jpg/1920px-Close_up_shot_of_Pasha_Bulker_b.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=thumbnail",
+    "file": "ship_storm_7.jpg",
+    "slot": "storm"
+  },
+  {
+    "theme": "radar",
+    "title": "File:A52 Oste im Trockendock, Hamburg.JPG",
+    "licence": "CC BY 3.0 de",
+    "category": "Category:Ship radars",
+    "artist": "User:High Contrast",
+    "descurl": "https://commons.wikimedia.org/wiki/File:A52_Oste_im_Trockendock,_Hamburg.JPG",
+    "url": "https://upload.wikimedia.org/wikipedia/commons/thumb/b/bf/A52_Oste_im_Trockendock%2C_Hamburg.JPG/1920px-A52_Oste_im_Trockendock%2C_Hamburg.JPG?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=thumbnail",
+    "file": "radar_2.jpg",
+    "slot": "satcom"
+  },
+  {
+    "theme": "radar",
+    "title": "File:AL-AZIZ 2662.jpg",
+    "licence": "CC BY-SA 4.0",
+    "category": "Category:Ship radars",
+    "artist": "Ein Dahmer",
+    "descurl": "https://commons.wikimedia.org/wiki/File:AL-AZIZ_2662.jpg",
+    "url": "https://upload.wikimedia.org/wikipedia/commons/thumb/6/6a/AL-AZIZ_2662.jpg/1920px-AL-AZIZ_2662.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=thumbnail",
+    "file": "radar_3.jpg",
+    "slot": "sensor"
+  }
+]
